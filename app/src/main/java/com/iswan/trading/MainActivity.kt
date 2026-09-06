@@ -36,7 +36,7 @@ fun IswanTradingApp() {
         Market("NAS100", "Nasdaq 100", "Index"), Market("US30", "Dow Jones", "Index")
     )
     LaunchedEffect(Unit) {
-        while (true) { prices = repository.getPrices(markets.map { it.symbol }); delay(15_000) }
+        while (true) { prices = repository.getPrices(markets.map { it.symbol }); delay(1_000) }
     }
     MaterialTheme(colorScheme = darkColorScheme(background = Color(0xFF0B0F14), surface = Color(0xFF111820))) {
         Scaffold(bottomBar = { NavigationBar { listOf("Markets", "Watchlist", "Analysis", "Settings").forEach { item -> NavigationBarItem(selected = selected == item, onClick = { selected = item; selectedMarket = null }, icon = {}, label = { Text(item) }) } } }) { pad ->
@@ -69,7 +69,7 @@ fun IswanTradingApp() {
         Spacer(Modifier.height(18.dp)); Text(m.symbol, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold); Text(m.name, color = Color.Gray)
         Spacer(Modifier.height(10.dp)); Text(m.price?.let { "%.5f".format(it) } ?: "—", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(18.dp)); Card(Modifier.fillMaxWidth().height(300.dp)) { Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("CHART\n\nCandle data: tahap berikutnya", color = Color.Gray) } }
-        Spacer(Modifier.height(14.dp)); Text("LIVE PRICE FEED", fontWeight = FontWeight.Bold); Text("Harga diperbarui berkala dari provider data publik. Untuk trading-grade feed, provider broker/exchange akan dipasang pada tahap berikutnya.", color = Color.Gray)
+        Spacer(Modifier.height(14.dp)); Text("LIVE PRICE FEED", fontWeight = FontWeight.Bold); Text("Harga diperbarui setiap 1 detik dari provider data publik. Untuk trading-grade feed, provider broker/exchange akan dipasang pada tahap berikutnya.", color = Color.Gray)
     }
 }
 
