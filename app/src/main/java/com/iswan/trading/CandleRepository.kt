@@ -1,13 +1,11 @@
 package com.iswan.trading
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
+import org.json.JSONArray
+import java.util.concurrent.TimeUnit
 
 data class Candle(
     val time: Long,
@@ -18,65 +16,47 @@ data class Candle(
     val volume: Double
 )
 
-object MarketSymbolMapper {
-    fun providerSymbol(symbol: String): String = when (symbol.uppercase()) {
-        "XAUUSD" -> "XAUUSD=X"
-        "EURUSD" -> "EURUSD=X"
-        "GBPUSD" -> "GBPUSD=X"
-        "USDJPY" -> "JPY=X"
-        "BTCUSDT" -> "BTC-USD"
-        "ETHUSDT" -> "ETH-USD"
-        "NAS100" -> "^NDX"
-        "US30" -> "^DJI"
-        else -> symbol
-    }
-}
-
-class CandleRepository {
+class CandleRepository(private val baseUrl: String) {
     private val client = OkHttpClient.Builder()
-        .callTimeout(java.time.Duration.ofSeconds(8))
-        .connectTimeout(java.time.Duration.ofSeconds(5))
-        .readTimeout(java.time.Duration.ofSeconds(8))
+        .callTimeout(7, TimeUnit.SECONDS)
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(7, TimeUnit.SECONDS)
         .build()
 
-    suspend fun getCandles(symbols: List<String>, range: String = "1d", interval: String = "5m"): Map<String, List<Candle>> = coroutineScope {
-        symbols.map { symbol ->
-            async(Dispatchers.IO) { symbol to fetch(symbol, range, interval) }
-        }.awaitAll().toMap().filterValues { it.isNotEmpty() }
+    suspend fun getCandles(symbols: List<String>, range: String = "1d", interval: String = "5m"): Map<String, List<Candle>> = withContext(Dispatchers.IO) {
+        if (baseUrl.isBlank()) return@withContext emptyMap()
+        symbols.associateWith { symbol -> fetch(symbol, interval) }.filterValues { it.isNotEmpty() }
     }
 
     suspend fun getCandles(symbol: String, range: String = "1d", interval: String = "5m"): List<Candle> = withContext(Dispatchers.IO) {
-        fetch(symbol, range, interval)
+        if (baseUrl.isBlank()) emptyList() else fetch(symbol, interval)
     }
 
-    private fun fetch(symbol: String, range: String, interval: String): List<Candle> {
+    private fun fetch(symbol: String, interval: String): List<Candle> {
         return try {
-            val provider = MarketSymbolMapper.providerSymbol(symbol)
-            val url = "https://query1.finance.yahoo.com/v8/finance/chart/$provider?range=$range&interval=$interval&events=history"
-            val request = Request.Builder()
-                .url(url)
-                .header("User-Agent", "IswanTrading/0.3")
-                .header("Accept", "application/json")
-                .build()
+            val timeframe = when (interval.lowercase()) {
+                "1m" -> "1Min"
+                "5m" -> "5Min"
+                "15m" -> "15Min"
+                "30m" -> "30Min"
+                "1h" -> "1Hour"
+                "1d" -> "1Day"
+                else -> "5Min"
+            }
+            val url = baseUrl.trimEnd('/') + "/v1/candles?symbol=" + symbol + "&timeframe=" + timeframe + "&limit=160"
+            val request = Request.Builder().url(url).header("Accept", "application/json").build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return emptyList()
-                val body = response.body?.string() ?: return emptyList()
-                val result = JSONObject(body).getJSONObject("chart").getJSONArray("result").optJSONObject(0) ?: return emptyList()
-                val timestamps = result.optJSONArray("timestamp") ?: return emptyList()
-                val quote = result.getJSONObject("indicators").getJSONArray("quote").optJSONObject(0) ?: return emptyList()
-                val open = quote.optJSONArray("open") ?: return emptyList()
-                val high = quote.optJSONArray("high") ?: return emptyList()
-                val low = quote.optJSONArray("low") ?: return emptyList()
-                val close = quote.optJSONArray("close") ?: return emptyList()
-                val volume = quote.optJSONArray("volume")
+                val array = JSONArray(response.body?.string() ?: "[]")
                 buildList {
-                    for (i in 0 until timestamps.length()) {
-                        val o = open.optDouble(i, Double.NaN)
-                        val h = high.optDouble(i, Double.NaN)
-                        val l = low.optDouble(i, Double.NaN)
-                        val c = close.optDouble(i, Double.NaN)
+                    for (i in 0 until array.length()) {
+                        val item = array.getJSONObject(i)
+                        val o = item.getDouble("open")
+                        val h = item.getDouble("high")
+                        val l = item.getDouble("low")
+                        val c = item.getDouble("close")
                         if (o.isFinite() && h.isFinite() && l.isFinite() && c.isFinite() && h >= maxOf(o, c) && l <= minOf(o, c)) {
-                            add(Candle(timestamps.optLong(i) * 1000L, o, h, l, c, volume?.optDouble(i, 0.0) ?: 0.0))
+                            add(Candle(item.getLong("time"), o, h, l, c, item.optDouble("volume", 0.0)))
                         }
                     }
                 }.takeLast(160)
@@ -84,5 +64,12 @@ class CandleRepository {
         } catch (_: Exception) {
             emptyList()
         }
+    }
+
+    fun close() {
+        client.dispatcher.cancelAll()
+        client.dispatcher.executorService.shutdown()
+        client.connectionPool.evictAll()
+        client.cache?.close()
     }
 }
