@@ -3,7 +3,7 @@ package com.iswan.trading
 data class Market(val symbol: String, val name: String, val category: String)
 
 object MarketCatalog {
-    // Familiar MT4-style symbols mapped by the backend to Twelve Data symbols.
+    // Familiar MT4-style symbols mapped by the backend to Yahoo Finance symbols.
     val markets: List<Market> = listOf(
         Market("XAUUSD", "Gold / US Dollar", "Metals"),
         Market("EURUSD", "Euro / US Dollar", "Forex"),
