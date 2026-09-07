@@ -16,7 +16,7 @@ data class Candle(
     val volume: Double
 )
 
-class CandleRepository(private val baseUrl: String) {
+class CandleRepository {
     private val client = OkHttpClient.Builder()
         .callTimeout(7, TimeUnit.SECONDS)
         .connectTimeout(3, TimeUnit.SECONDS)
@@ -24,12 +24,12 @@ class CandleRepository(private val baseUrl: String) {
         .build()
 
     suspend fun getCandles(symbols: List<String>, range: String = "1d", interval: String = "5m"): Map<String, List<Candle>> = withContext(Dispatchers.IO) {
-        if (baseUrl.isBlank()) return@withContext emptyMap()
-        symbols.associateWith { symbol -> fetch(symbol, interval) }.filterValues { it.isNotEmpty() }
+        if (BackendConfig.baseUrl.isBlank()) return@withContext emptyMap()
+        symbols.mapNotNull { symbol -> fetch(symbol, interval).takeIf { it.isNotEmpty() }?.let { symbol to it } }.toMap()
     }
 
     suspend fun getCandles(symbol: String, range: String = "1d", interval: String = "5m"): List<Candle> = withContext(Dispatchers.IO) {
-        if (baseUrl.isBlank()) emptyList() else fetch(symbol, interval)
+        if (BackendConfig.baseUrl.isBlank()) emptyList() else fetch(symbol, interval)
     }
 
     private fun fetch(symbol: String, interval: String): List<Candle> {
@@ -43,7 +43,7 @@ class CandleRepository(private val baseUrl: String) {
                 "1d" -> "1Day"
                 else -> "5Min"
             }
-            val url = baseUrl.trimEnd('/') + "/v1/candles?symbol=" + symbol + "&timeframe=" + timeframe + "&limit=160"
+            val url = BackendConfig.baseUrl.trimEnd('/') + "/v1/candles?symbol=" + symbol + "&timeframe=" + timeframe + "&limit=160"
             val request = Request.Builder().url(url).header("Accept", "application/json").build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return emptyList()
