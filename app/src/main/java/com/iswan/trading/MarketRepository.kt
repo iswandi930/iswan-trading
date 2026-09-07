@@ -1,49 +1,43 @@
 package com.iswan.trading
 
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import org.json.JSONObject
-import java.time.Duration
+import org.json.JSONArray
+import java.util.concurrent.TimeUnit
 
 data class MarketQuote(val price: Double, val changePercent: Double?, val marketTime: Long?)
 
-class MarketRepository {
+class MarketRepository(private val baseUrl: String) {
     private val client = OkHttpClient.Builder()
-        .callTimeout(Duration.ofSeconds(6))
-        .connectTimeout(Duration.ofSeconds(4))
-        .readTimeout(Duration.ofSeconds(6))
+        .callTimeout(5, TimeUnit.SECONDS)
+        .connectTimeout(3, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
         .build()
 
-    suspend fun getPrices(symbols: List<String>): Map<String, MarketQuote> = coroutineScope {
-        symbols.map { symbol ->
-            async(Dispatchers.IO) { symbol to fetchQuote(symbol) }
-        }.awaitAll().mapNotNull { (symbol, quote) -> quote?.let { symbol to it } }.toMap()
-    }
-
-    private fun fetchQuote(symbol: String): MarketQuote? = try {
-        val provider = MarketSymbolMapper.providerSymbol(symbol)
-        val url = "https://query1.finance.yahoo.com/v8/finance/chart/$provider?range=1d&interval=1m&events=history"
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "IswanTrading/0.3")
-            .header("Accept", "application/json")
-            .build()
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) return null
-            val body = response.body?.string() ?: return null
-            val result = JSONObject(body).getJSONObject("chart").getJSONArray("result").optJSONObject(0) ?: return null
-            val meta = result.getJSONObject("meta")
-            val price = meta.optDouble("regularMarketPrice", Double.NaN).takeUnless { it.isNaN() } ?: return null
-            val previous = meta.optDouble("previousClose", Double.NaN).takeUnless { it.isNaN() }
-            val marketTime = meta.optLong("regularMarketTime", 0L).takeIf { it > 0L }?.times(1000L)
-            MarketQuote(price, previous?.takeIf { it != 0.0 }?.let { (price - it) / it * 100.0 }, marketTime)
+    suspend fun getPrices(symbols: List<String>): Map<String, MarketQuote> = withContext(Dispatchers.IO) {
+        if (baseUrl.isBlank() || symbols.isEmpty()) return@withContext emptyMap()
+        try {
+            val url = baseUrl.trimEnd('/') + "/v1/quotes?symbols=" + symbols.joinToString(",")
+            val request = Request.Builder().url(url).header("Accept", "application/json").build()
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@withContext emptyMap()
+                val array = JSONArray(response.body?.string() ?: "[]")
+                buildMap {
+                    for (i in 0 until array.length()) {
+                        val item = array.getJSONObject(i)
+                        put(item.getString("symbol"), MarketQuote(
+                            price = item.getDouble("price"),
+                            changePercent = if (item.isNull("changePercent")) null else item.optDouble("changePercent"),
+                            marketTime = if (item.isNull("marketTime")) null else item.optLong("marketTime")
+                        ))
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            emptyMap()
         }
-    } catch (_: Exception) {
-        null
     }
 
     fun close() {
