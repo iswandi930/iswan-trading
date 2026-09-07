@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 
 import httpx
@@ -8,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Public Market Engine", version="0.4.1")
+app = FastAPI(title="Iswan Trading Public Market Engine", version="0.5.0")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -61,6 +62,9 @@ class MarketQuote(BaseModel):
     price: float
     changePercent: float | None = None
     marketTime: int | None = None
+    source: str | None = None
+    live: bool = False
+    freshness: str = "unknown"
 
 
 class AnalysisRequest(BaseModel):
@@ -82,7 +86,7 @@ def health() -> dict[str, str]:
         "status": "ok",
         "service": "iswan-public-market-engine",
         "provider": "public-no-key",
-        "twelve_data": "optional",
+        "policy": "no-scraping-no-fake-prices",
     }
 
 
@@ -91,7 +95,10 @@ async def _gold_quote() -> MarketQuote | None:
     if isinstance(data, list):
         for row in data:
             if isinstance(row, dict) and row.get("gold") is not None:
-                return MarketQuote(symbol="XAUUSD", price=float(row["gold"]), marketTime=_now_ms())
+                return MarketQuote(
+                    symbol="XAUUSD", price=float(row["gold"]), marketTime=_now_ms(),
+                    source="metals.live public spot endpoint", live=True, freshness="public-spot",
+                )
     return None
 
 
@@ -108,28 +115,33 @@ async def _forex_quotes(requested: list[str]) -> dict[str, tuple[float, int]]:
     return result
 
 
+async def _crypto_one(symbol: str) -> tuple[str, float, float | None, int] | None:
+    pair = symbol.replace("USD", "USDT")
+    data = await _json("https://api.binance.com/api/v3/ticker/24hr", {"symbol": pair})
+    if isinstance(data, dict) and data.get("lastPrice") is not None:
+        return symbol, float(data["lastPrice"]), float(data.get("priceChangePercent", 0.0)), _now_ms()
+    return None
+
+
 async def _crypto_quotes(requested: list[str]) -> dict[str, tuple[float, float | None, int]]:
-    result: dict[str, tuple[float, float | None, int]] = {}
-    for symbol in requested:
-        pair = symbol.replace("USD", "USDT")
-        data = await _json("https://api.binance.com/api/v3/ticker/24hr", {"symbol": pair})
-        if isinstance(data, dict) and data.get("lastPrice") is not None:
-            result[symbol] = (float(data["lastPrice"]), float(data.get("priceChangePercent", 0.0)), _now_ms())
-    return result
+    rows = await asyncio.gather(*(_crypto_one(symbol) for symbol in requested))
+    return {symbol: (price, change, ts) for row in rows if row for symbol, price, change, ts in [row]}
+
+
+async def _stock_one(symbol: str) -> tuple[str, float, int] | None:
+    ticker = STOOQ[symbol]
+    data = await _json("https://stooq.com/q/l/", {"s": ticker, "f": "sd2t2ohlcv", "h": "", "e": "json"})
+    rows = data.get("data", []) if isinstance(data, dict) else []
+    if rows:
+        close = rows[0].get("close")
+        if close not in (None, "N/D"):
+            return symbol, float(close), _now_ms()
+    return None
 
 
 async def _stock_quotes(requested: list[str]) -> dict[str, tuple[float, float | None, int]]:
-    result: dict[str, tuple[float, float | None, int]] = {}
-    for symbol in requested:
-        ticker = STOOQ[symbol]
-        data = await _json("https://stooq.com/q/l/", {"s": ticker, "f": "sd2t2ohlcv", "h": "", "e": "json"})
-        rows = data.get("data", []) if isinstance(data, dict) else []
-        if rows:
-            row = rows[0]
-            close = row.get("close")
-            if close not in (None, "N/D"):
-                result[symbol] = (float(close), None, _now_ms())
-    return result
+    rows = await asyncio.gather(*(_stock_one(symbol) for symbol in requested))
+    return {symbol: (price, None, ts) for row in rows if row for symbol, price, ts in [row]}
 
 
 @app.get("/v1/quotes", response_model=list[MarketQuote])
@@ -148,20 +160,29 @@ async def quotes(symbols: str) -> list[MarketQuote]:
     forex = [s for s in requested if s in FOREX_BASES]
     if forex:
         for symbol, (price, ts) in (await _forex_quotes(forex)).items():
-            result[symbol] = MarketQuote(symbol=symbol, price=price, marketTime=ts)
+            result[symbol] = MarketQuote(
+                symbol=symbol, price=price, marketTime=ts,
+                source="open.er-api.com", live=False, freshness="reference-rate",
+            )
 
     crypto = [s for s in requested if s in {"BTCUSD", "ETHUSD"}]
     if crypto:
         for symbol, (price, change, ts) in (await _crypto_quotes(crypto)).items():
-            result[symbol] = MarketQuote(symbol=symbol, price=price, changePercent=change, marketTime=ts)
+            result[symbol] = MarketQuote(
+                symbol=symbol, price=price, changePercent=change, marketTime=ts,
+                source="Binance public market-data API", live=True, freshness="real-time-public",
+            )
 
     stocks = [s for s in requested if s in STOOQ]
     if stocks:
         for symbol, (price, change, ts) in (await _stock_quotes(stocks)).items():
-            result[symbol] = MarketQuote(symbol=symbol, price=price, changePercent=change, marketTime=ts)
+            result[symbol] = MarketQuote(
+                symbol=symbol, price=price, changePercent=change, marketTime=ts,
+                source="Stooq", live=False, freshness="provider-quote",
+            )
 
-    # Oil has no no-key provider wired in yet. It is omitted instead of showing
-    # fabricated data. The same rule applies to every unsupported live feed.
+    # Oil has no verified no-account real-time feed wired in. Omit it rather than
+    # inventing or relaying an unlicensed/scraped quote.
     return [result[s] for s in requested if s in result]
 
 
