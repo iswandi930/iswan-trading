@@ -117,7 +117,13 @@ private fun MarketsScreen(
 private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: CandleRepository, onBack: () -> Unit) {
     var range by remember { mutableStateOf("1d") }
     var candles by remember(symbol, range) { mutableStateOf<List<Candle>>(emptyList()) }
-    LaunchedEffect(symbol, range) { candles = repo.getCandles(listOf(symbol), range)[symbol].orEmpty() }
+    LaunchedEffect(symbol, range) {
+        while (isActive) {
+            val next = repo.getCandles(listOf(symbol), range)[symbol].orEmpty()
+            if (next.isNotEmpty()) candles = next
+            delay(1000)
+        }
+    }
     Column(Modifier.fillMaxSize().padding(14.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("‹  $symbol", fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBack() })
