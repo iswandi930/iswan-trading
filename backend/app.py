@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.1")
+app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.2")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -181,6 +181,28 @@ def _rows_to_candles(result: dict, limit: int) -> list[Candle]:
     return out[-limit:]
 
 
+def _aggregate_buckets(rows: list[Candle], minutes: int) -> list[Candle]:
+    if not rows:
+        return []
+    bucket_ms = minutes * 60_000
+    grouped: dict[int, list[Candle]] = {}
+    for row in rows:
+        start = (row.time // bucket_ms) * bucket_ms
+        grouped.setdefault(start, []).append(row)
+    out: list[Candle] = []
+    for start in sorted(grouped):
+        bucket = grouped[start]
+        out.append(Candle(
+            time=start,
+            open=bucket[0].open,
+            high=max(c.high for c in bucket),
+            low=min(c.low for c in bucket),
+            close=bucket[-1].close,
+            volume=sum(c.volume for c in bucket),
+        ))
+    return out
+
+
 def _aggregate_current_bucket(one_minute: list[Candle], minutes: int) -> Candle | None:
     if not one_minute:
         return None
@@ -216,22 +238,29 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
     if symbol not in SYMBOLS:
         raise HTTPException(status_code=404, detail=f"Unsupported symbol: {symbol}")
     limit = max(21, min(limit, 1000))
+    key = timeframe.lower().strip()
     intervals = {
         "1min": ("1d", "1m"), "5min": ("5d", "5m"), "15min": ("5d", "15m"),
         "30min": ("1mo", "30m"), "1h": ("3mo", "1h"), "4h": ("6mo", "1h"),
         "1day": ("2y", "1d"),
     }
-    range_interval = intervals.get(timeframe.lower())
+    range_interval = intervals.get(key)
     if range_interval is None:
         raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
     range_, interval = range_interval
     result = await _yahoo_chart(symbol, range_, interval)
-    candles_out = _rows_to_candles(result, limit)
+    raw = _rows_to_candles(result, 1000 if key == "4h" else limit)
 
-    # Native Yahoo intraday bars can remain unchanged until the bar closes.
-    # Refresh the forming bar from Yahoo 1m data so the chart follows real source movement.
-    minutes = {"1min": 1, "5min": 5, "15min": 15, "30min": 30}.get(timeframe.lower())
-    if minutes is not None and timeframe.lower() != "1min":
+    # Yahoo does not expose a native 4H bar. Build exact 4-hour candles from Yahoo 1H bars.
+    if key == "4h":
+        raw = _aggregate_buckets(raw, 240)
+        return raw[-limit:]
+
+    candles_out = raw[-limit:]
+
+    # Refresh the currently forming intraday candle from Yahoo 1m data so the chart follows source movement.
+    minutes = {"1min": 1, "5min": 5, "15min": 15, "30min": 30}.get(key)
+    if minutes is not None and key != "1min":
         try:
             live_result = await _yahoo_chart(symbol, "1d", "1m")
             live_rows = _rows_to_candles(live_result, 1000)
