@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Public Market Engine", version="0.5.0")
+app = FastAPI(title="Iswan Trading Public Market Engine", version="0.6.0")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -31,6 +31,12 @@ FOREX_BASES = {
 STOOQ = {
     "AAPL": "aapl.us", "MSFT": "msft.us", "NVDA": "nvda.us", "AMZN": "amzn.us",
     "META": "meta.us", "TSLA": "tsla.us", "SPY": "spy.us", "QQQ": "qqq.us",
+}
+
+YAHOO_FUTURES = {
+    # Yahoo Finance futures symbols: WTI crude and Brent crude.
+    "USOIL": "CL=F",
+    "UKOIL": "BZ=F",
 }
 
 
@@ -86,7 +92,8 @@ def health() -> dict[str, str]:
         "status": "ok",
         "service": "iswan-public-market-engine",
         "provider": "public-no-key",
-        "policy": "no-scraping-no-fake-prices",
+        "policy": "no-fake-prices",
+        "oilProvider": "Yahoo Finance public chart endpoint",
     }
 
 
@@ -144,6 +151,56 @@ async def _stock_quotes(requested: list[str]) -> dict[str, tuple[float, float | 
     return {symbol: (price, None, ts) for row in rows if row for symbol, price, ts in [row]}
 
 
+async def _yahoo_oil_one(symbol: str) -> MarketQuote | None:
+    ticker = YAHOO_FUTURES[symbol]
+    data = await _json(
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
+        {"range": "1d", "interval": "1m", "includePrePost": "true", "events": "div,splits"},
+    )
+    chart = data.get("chart", {}) if isinstance(data, dict) else {}
+    result_rows = chart.get("result") or []
+    if not result_rows:
+        return None
+    result = result_rows[0]
+    meta = result.get("meta", {})
+    price = meta.get("regularMarketPrice")
+    if price is None:
+        indicators = result.get("indicators", {})
+        quotes = indicators.get("quote") or []
+        closes = quotes[0].get("close") if quotes else None
+        if closes:
+            valid = [x for x in closes if x is not None]
+            price = valid[-1] if valid else None
+    if price is None:
+        return None
+    previous = meta.get("previousClose")
+    change = None
+    if previous not in (None, 0):
+        change = (float(price) - float(previous)) / float(previous) * 100.0
+    market_time = meta.get("regularMarketTime")
+    market_ms = int(market_time * 1000) if market_time else _now_ms()
+    return MarketQuote(
+        symbol=symbol,
+        price=float(price),
+        changePercent=change,
+        marketTime=market_ms,
+        source="Yahoo Finance public chart endpoint",
+        # Yahoo's commodity/futures quote can be exchange-delayed. Do not label
+        # it as tick-real-time merely because the endpoint is polled every second.
+        live=False,
+        freshness="Yahoo-futures-quote",
+    )
+
+
+async def _yahoo_oil_quotes(requested: list[str]) -> dict[str, MarketQuote]:
+    rows = await asyncio.gather(*(_yahoo_oil_one(symbol) for symbol in requested), return_exceptions=True)
+    result: dict[str, MarketQuote] = {}
+    for row in rows:
+        if isinstance(row, MarketQuote):
+            result[row.symbol] = row
+    return result
+
+
 @app.get("/v1/quotes", response_model=list[MarketQuote])
 async def quotes(symbols: str) -> list[MarketQuote]:
     requested = [s.strip().upper() for s in symbols.split(",") if s.strip()]
@@ -181,8 +238,10 @@ async def quotes(symbols: str) -> list[MarketQuote]:
                 source="Stooq", live=False, freshness="provider-quote",
             )
 
-    # Oil has no verified no-account real-time feed wired in. Omit it rather than
-    # inventing or relaying an unlicensed/scraped quote.
+    oil = [s for s in requested if s in YAHOO_FUTURES]
+    if oil:
+        result.update(await _yahoo_oil_quotes(oil))
+
     return [result[s] for s in requested if s in result]
 
 
