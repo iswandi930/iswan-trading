@@ -50,6 +50,7 @@ private fun IswanTradingApp(context: Context) {
     var screen by remember { mutableStateOf("Markets") }
     var selected by remember { mutableStateOf<String?>(null) }
     var prices by remember { mutableStateOf<Map<String, MarketQuote>>(emptyMap()) }
+    var marketError by remember { mutableStateOf<String?>(null) }
     var watchlist by remember { mutableStateOf(loadWatchlist(context)) }
     var pythonBaseUrl by remember { mutableStateOf(loadPythonBaseUrl(context)) }
     val markets = remember { MarketCatalog.markets }
@@ -58,6 +59,7 @@ private fun IswanTradingApp(context: Context) {
         while (isActive) {
             val next = repository.getPrices(markets.map { it.symbol })
             if (next.isNotEmpty()) prices = next
+            marketError = repository.lastError
             delay(1000)
         }
     }
@@ -73,8 +75,20 @@ private fun IswanTradingApp(context: Context) {
                     ) {
                         Text("ISWAN TRADING", fontWeight = FontWeight.Bold)
                         Text(
-                            if (prices.isNotEmpty()) "● YAHOO • UPDATE 1s" else "● CONNECTING",
-                            color = Color.Gray
+                            when {
+                                marketError != null -> "● DATA ERROR"
+                                prices.isNotEmpty() -> "● YAHOO • UPDATE 1s"
+                                else -> "● CONNECTING"
+                            },
+                            color = if (marketError != null) Color.Red else Color.Gray
+                        )
+                    }
+                    if (marketError != null) {
+                        Text(
+                            "Data: ${marketError}",
+                            color = Color.Red,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
                         )
                     }
                     when (screen) {
@@ -138,11 +152,13 @@ private fun MarketsScreen(
 private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: CandleRepository, onBack: () -> Unit) {
     var timeframe by remember { mutableStateOf(TIMEFRAMES[1]) }
     var candles by remember(symbol, timeframe) { mutableStateOf<List<Candle>>(emptyList()) }
+    var candleError by remember(symbol, timeframe) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(symbol, timeframe) {
         while (isActive) {
             val next = repo.getCandles(symbol, "1d", timeframe.apiValue)
             if (next.isNotEmpty()) candles = next
+            candleError = repo.lastError
             delay(1000)
         }
     }
@@ -154,6 +170,9 @@ private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: Candle
         }
         Text(quote?.changePercent?.let { "%+.2f%%".format(it) } ?: "—", color = Color.Gray)
         Text("Yahoo Finance • TF ${timeframe.label} • refresh 1 detik", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+        candleError?.let { error ->
+            Text("Data candle: $error", color = Color.Red, style = MaterialTheme.typography.bodySmall)
+        }
 
         Row(
             Modifier.fillMaxWidth().padding(vertical = 10.dp),
