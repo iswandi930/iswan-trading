@@ -17,7 +17,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Offset
 import androidx.compose.ui.graphics.Size
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
@@ -38,7 +37,6 @@ private fun IswanTradingApp(context: Context) {
     var selected by remember { mutableStateOf<String?>(null) }
     var prices by remember { mutableStateOf<Map<String, MarketQuote>>(emptyMap()) }
     var watchlist by remember { mutableStateOf(loadWatchlist(context)) }
-
     val markets = remember { MarketCatalog.markets }
 
     LaunchedEffect(Unit) {
@@ -62,14 +60,35 @@ private fun IswanTradingApp(context: Context) {
                         Text(if (prices.isNotEmpty()) "● DATA LIVE" else "● CONNECTING", color = Color.Gray)
                     }
                     when (screen) {
-                        "Markets" -> MarketsScreen(markets, prices, watchlist) { selected = it }
-                        "Watchlist" -> MarketsScreen(markets.filter { watchlist.contains(it.symbol) }, prices, watchlist) { selected = it }
+                        "Markets" -> MarketsScreen(
+                            markets = markets,
+                            prices = prices,
+                            watchlist = watchlist,
+                            onSelect = { selected = it },
+                            onToggleWatchlist = { symbol ->
+                                watchlist = toggleWatchlist(context, watchlist, symbol)
+                            }
+                        )
+                        "Watchlist" -> MarketsScreen(
+                            markets = markets.filter { watchlist.contains(it.symbol) },
+                            prices = prices,
+                            watchlist = watchlist,
+                            onSelect = { selected = it },
+                            onToggleWatchlist = { symbol ->
+                                watchlist = toggleWatchlist(context, watchlist, symbol)
+                            }
+                        )
                         "Analysis" -> AnalysisScreen(markets, candleRepository)
                         else -> SettingsScreen()
                     }
                     NavigationBar {
                         listOf("Markets", "Watchlist", "Analysis", "Settings").forEach { item ->
-                            NavigationBarItem(selected = screen == item, onClick = { screen = item }, icon = { Text(item.take(1)) }, label = { Text(item) })
+                            NavigationBarItem(
+                                selected = screen == item,
+                                onClick = { screen = item },
+                                icon = { Text(item.take(1)) },
+                                label = { Text(item) }
+                            )
                         }
                     }
                 } else {
@@ -83,13 +102,23 @@ private fun IswanTradingApp(context: Context) {
 }
 
 @Composable
-private fun MarketsScreen(markets: List<Market>, prices: Map<String, MarketQuote>, watchlist: Set<String>, onSelect: (String) -> Unit) {
+private fun MarketsScreen(
+    markets: List<Market>,
+    prices: Map<String, MarketQuote>,
+    watchlist: Set<String>,
+    onSelect: (String) -> Unit,
+    onToggleWatchlist: (String) -> Unit
+) {
     LazyColumn(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(markets, key = { it.symbol }) { market ->
             val quote = prices[market.symbol]
-            Card(Modifier.fillMaxWidth().clickable { onSelect(market.symbol) }) {
-                Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
+            Card(Modifier.fillMaxWidth()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(14.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Column(Modifier.weight(1f).clickable { onSelect(market.symbol) }) {
                         Text(market.symbol, fontWeight = FontWeight.Bold)
                         Text(market.name, color = Color.Gray)
                     }
@@ -98,7 +127,11 @@ private fun MarketsScreen(markets: List<Market>, prices: Map<String, MarketQuote
                         Text(quote?.changePercent?.let { "%+.2f%%".format(it) } ?: "—", color = Color.Gray)
                     }
                     Spacer(Modifier.width(10.dp))
-                    Text(if (watchlist.contains(market.symbol)) "★" else "☆")
+                    Text(
+                        if (watchlist.contains(market.symbol)) "★" else "☆",
+                        modifier = Modifier.clickable { onToggleWatchlist(market.symbol) },
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }
@@ -109,18 +142,31 @@ private fun MarketsScreen(markets: List<Market>, prices: Map<String, MarketQuote
 private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: CandleRepository, onBack: () -> Unit) {
     var range by remember { mutableStateOf("1d") }
     var candles by remember(symbol, range) { mutableStateOf<List<Candle>>(emptyList()) }
-    LaunchedEffect(symbol, range) { candles = repo.getCandles(listOf(symbol), range)[symbol].orEmpty() }
+    LaunchedEffect(symbol, range) {
+        candles = repo.getCandles(listOf(symbol), range)[symbol].orEmpty()
+    }
     Column(Modifier.fillMaxSize().padding(14.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text("‹  $symbol", fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBack() })
             Text(quote?.price?.let { "%.5f".format(it) } ?: "—")
         }
         Text(quote?.changePercent?.let { "%+.2f%%".format(it) } ?: "—", color = Color.Gray)
         Row(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("1d", "5d", "1mo").forEach { r -> FilterChip(selected = range == r, onClick = { range = r }, label = { Text(r) }) }
+            listOf("1d", "5d", "1mo").forEach { r ->
+                FilterChip(selected = range == r, onClick = { range = r }, label = { Text(r) })
+            }
         }
         Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) { CandleChart(candles) }
-        Text("Sinyal adalah skor teknikal, bukan jaminan profit. Akurasi harus divalidasi dengan backtest.", color = Color.Gray, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        Text(
+            "Sinyal adalah skor teknikal, bukan jaminan profit. Akurasi harus divalidasi dengan backtest.",
+            color = Color.Gray,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 8.dp)
+        )
     }
 }
 
@@ -136,10 +182,19 @@ private fun CandleChart(candles: List<Candle>) {
         fun y(price: Double): Float = size.height - (((price - minPrice) / span) * size.height).toFloat()
         visible.forEachIndexed { index, candle ->
             val x = step * (index + 0.5f)
-            drawLine(Color.White, Offset(x, y(candle.high)), Offset(x, y(candle.low)), strokeWidth = 1.5f)
+            drawLine(
+                color = Color.White,
+                start = Offset(x, y(candle.high)),
+                end = Offset(x, y(candle.low)),
+                strokeWidth = 1.5f
+            )
             val top = y(maxOf(candle.open, candle.close))
             val bottom = y(minOf(candle.open, candle.close))
-            drawRect(Color.White, topLeft = Offset(x - step * 0.3f, top), size = Size(step * 0.6f, (bottom - top).coerceAtLeast(2f)))
+            drawRect(
+                color = Color.White,
+                topLeft = Offset(x - step * 0.3f, top),
+                size = Size(step * 0.6f, (bottom - top).coerceAtLeast(2f))
+            )
         }
     }
 }
@@ -147,7 +202,9 @@ private fun CandleChart(candles: List<Candle>) {
 @Composable
 private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository) {
     var data by remember { mutableStateOf<Map<String, AnalysisResult>>(emptyMap()) }
-    LaunchedEffect(Unit) { data = repo.getCandles(markets.map { it.symbol }, "1d").mapValues { analyze(it.value) } }
+    LaunchedEffect(Unit) {
+        data = repo.getCandles(markets.map { it.symbol }, "1d").mapValues { analyze(it.value) }
+    }
     LazyColumn(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(markets, key = { it.symbol }) { market ->
             val result = data[market.symbol]
@@ -155,14 +212,18 @@ private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository) {
                 Column(Modifier.padding(14.dp)) {
                     Text(market.symbol, fontWeight = FontWeight.Bold)
                     Text(result?.let { "${it.signal.name}  ${it.confidence}%" } ?: "Mengambil data…")
-                    Text(result?.let { "Trend: ${it.trend}   RSI: ${it.rsi?.let { v -> "%.1f".format(v) } ?: "—"}" } ?: "", color = Color.Gray)
+                    Text(
+                        result?.let { "Trend: ${it.trend}   RSI: ${it.rsi?.let { v -> "%.1f".format(v) } ?: "—"}" } ?: "",
+                        color = Color.Gray
+                    )
                 }
             }
         }
     }
 }
 
-@Composable private fun SettingsScreen() {
+@Composable
+private fun SettingsScreen() {
     Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("Refresh harga: 1 detik")
@@ -171,19 +232,65 @@ private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository) {
     }
 }
 
-private fun loadWatchlist(context: Context): Set<String> = context.getSharedPreferences("iswan", Context.MODE_PRIVATE).getStringSet("watchlist", emptySet()) ?: emptySet()
+private fun loadWatchlist(context: Context): Set<String> =
+    context.getSharedPreferences("iswan", Context.MODE_PRIVATE)
+        .getStringSet("watchlist", emptySet())?.toSet() ?: emptySet()
+
+private fun toggleWatchlist(context: Context, current: Set<String>, symbol: String): Set<String> {
+    val updated = current.toMutableSet().apply {
+        if (!add(symbol)) remove(symbol)
+    }.toSet()
+    context.getSharedPreferences("iswan", Context.MODE_PRIVATE)
+        .edit().putStringSet("watchlist", updated).apply()
+    return updated
+}
+
 private fun analyze(candles: List<Candle>): AnalysisResult {
     if (candles.isEmpty()) return AnalysisResult(Signal.NEUTRAL, 0, "N/A", null)
     val closes = candles.map { it.close }
-    val ema9 = ema(closes, 9); val ema21 = ema(closes, 21); val sma20 = closes.takeLast(20).average(); val rsi = rsi(closes, 14)
+    val ema9 = ema(closes, 9)
+    val ema21 = ema(closes, 21)
+    val sma20 = closes.takeLast(20).average()
+    val rsi = rsi(closes, 14)
     val bullish = ema9 > ema21 && closes.last() > sma20 && (rsi == null || rsi < 70)
     val bearish = ema9 < ema21 && closes.last() < sma20 && (rsi == null || rsi > 30)
-    val signal = when { bullish -> Signal.BUY; bearish -> Signal.SELL; else -> Signal.NEUTRAL }
-    val confidence = listOf(ema9 > ema21, closes.last() > sma20, rsi != null && rsi > 50).count { it } * 25
+    val signal = when {
+        bullish -> Signal.BUY
+        bearish -> Signal.SELL
+        else -> Signal.NEUTRAL
+    }
+    val confidence = listOf(
+        ema9 > ema21,
+        closes.last() > sma20,
+        rsi != null && rsi > 50
+    ).count { it } * 25
     return AnalysisResult(signal, confidence, if (ema9 >= ema21) "BULLISH" else "BEARISH", rsi)
 }
-private fun ema(values: List<Double>, period: Int): Double { val k = 2.0 / (period + 1); var e = values.take(period).average(); for (v in values.drop(period)) e = v * k + e * (1 - k); return e }
-private fun rsi(values: List<Double>, period: Int): Double? { if (values.size <= period) return null; var gain = 0.0; var loss = 0.0; for (i in 1..period) { val d = values[i] - values[i-1]; if (d >= 0) gain += d else loss -= d }; gain /= period; loss /= period; for (i in period+1 until values.size) { val d = values[i] - values[i-1]; gain = (gain*(period-1) + maxOf(d,0.0))/period; loss = (loss*(period-1) + maxOf(-d,0.0))/period }; return if (loss == 0.0) 100.0 else 100.0 - 100.0/(1.0 + gain/loss) }
+
+private fun ema(values: List<Double>, period: Int): Double {
+    val k = 2.0 / (period + 1)
+    var e = values.take(period).average()
+    for (v in values.drop(period)) e = v * k + e * (1 - k)
+    return e
+}
+
+private fun rsi(values: List<Double>, period: Int): Double? {
+    if (values.size <= period) return null
+    var gain = 0.0
+    var loss = 0.0
+    for (i in 1..period) {
+        val d = values[i] - values[i - 1]
+        if (d >= 0) gain += d else loss -= d
+    }
+    gain /= period
+    loss /= period
+    for (i in period + 1 until values.size) {
+        val d = values[i] - values[i - 1]
+        gain = (gain * (period - 1) + maxOf(d, 0.0)) / period
+        loss = (loss * (period - 1) + maxOf(-d, 0.0)) / period
+    }
+    return if (loss == 0.0) 100.0 else 100.0 - 100.0 / (1.0 + gain / loss)
+}
 
 enum class Signal { BUY, SELL, NEUTRAL }
 data class AnalysisResult(val signal: Signal, val confidence: Int, val trend: String, val rsi: Double?)
