@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Public Market Engine", version="0.6.0")
+app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.7.0")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -18,25 +18,17 @@ SYMBOLS = {
     "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "SPY", "QQQ",
 }
 
-FOREX_BASES = {
-    "EURUSD": ("EUR", "USD"), "GBPUSD": ("GBP", "USD"), "USDJPY": ("USD", "JPY"),
-    "USDCHF": ("USD", "CHF"), "AUDUSD": ("AUD", "USD"), "USDCAD": ("USD", "CAD"),
-    "NZDUSD": ("NZD", "USD"), "EURGBP": ("EUR", "GBP"), "EURJPY": ("EUR", "JPY"),
-    "GBPJPY": ("GBP", "JPY"), "AUDJPY": ("AUD", "JPY"), "EURAUD": ("EUR", "AUD"),
-    "EURCHF": ("EUR", "CHF"), "GBPCHF": ("GBP", "CHF"), "AUDCAD": ("AUD", "CAD"),
-    "AUDCHF": ("AUD", "CHF"), "CADJPY": ("CAD", "JPY"), "CHFJPY": ("CHF", "JPY"),
-    "NZDJPY": ("NZD", "JPY"), "NZDCHF": ("NZD", "CHF"),
-}
-
-STOOQ = {
-    "AAPL": "aapl.us", "MSFT": "msft.us", "NVDA": "nvda.us", "AMZN": "amzn.us",
-    "META": "meta.us", "TSLA": "tsla.us", "SPY": "spy.us", "QQQ": "qqq.us",
-}
-
-YAHOO_FUTURES = {
-    # Yahoo Finance futures symbols: WTI crude and Brent crude.
-    "USOIL": "CL=F",
-    "UKOIL": "BZ=F",
+# Yahoo Finance chart symbols. The app's displayed market symbols remain unchanged.
+YAHOO_SYMBOLS = {
+    "XAUUSD": "GC=F", "USOIL": "CL=F", "UKOIL": "BZ=F",
+    "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "JPY=X", "USDCHF": "CHF=X",
+    "AUDUSD": "AUDUSD=X", "USDCAD": "CAD=X", "NZDUSD": "NZDUSD=X",
+    "EURGBP": "EURGBP=X", "EURJPY": "EURJPY=X", "GBPJPY": "GBPJPY=X", "AUDJPY": "AUDJPY=X",
+    "EURAUD": "EURAUD=X", "EURCHF": "EURCHF=X", "GBPCHF": "GBPCHF=X", "AUDCAD": "AUDCAD=X",
+    "AUDCHF": "AUDCHF=X", "CADJPY": "CADJPY=X", "CHFJPY": "CHFJPY=X", "NZDJPY": "NZDJPY=X",
+    "NZDCHF": "NZDCHF=X", "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD",
+    "AAPL": "AAPL", "MSFT": "MSFT", "NVDA": "NVDA", "AMZN": "AMZN",
+    "META": "META", "TSLA": "TSLA", "SPY": "SPY", "QQQ": "QQQ",
 }
 
 
@@ -46,12 +38,12 @@ def _now_ms() -> int:
 
 async def _json(url: str, params: dict | None = None) -> dict | list:
     try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as client:
             response = await client.get(url, params=params)
             response.raise_for_status()
             return response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail=f"Market provider connection error: {exc}") from exc
+        raise HTTPException(status_code=502, detail=f"Yahoo market provider connection error: {exc}") from exc
 
 
 class Candle(BaseModel):
@@ -90,115 +82,67 @@ class AnalysisResponse(BaseModel):
 def health() -> dict[str, str]:
     return {
         "status": "ok",
-        "service": "iswan-public-market-engine",
-        "provider": "public-no-key",
-        "policy": "no-fake-prices",
-        "oilProvider": "Yahoo Finance public chart endpoint",
+        "service": "iswan-yahoo-market-engine",
+        "provider": "Yahoo Finance chart endpoint",
+        "policy": "same-source-quotes-and-candles-no-fake-prices",
     }
 
 
-async def _gold_quote() -> MarketQuote | None:
-    data = await _json("https://api.metals.live/v1/spot")
-    if isinstance(data, list):
-        for row in data:
-            if isinstance(row, dict) and row.get("gold") is not None:
-                return MarketQuote(
-                    symbol="XAUUSD", price=float(row["gold"]), marketTime=_now_ms(),
-                    source="metals.live public spot endpoint", live=True, freshness="public-spot",
-                )
-    return None
-
-
-async def _forex_quotes(requested: list[str]) -> dict[str, tuple[float, int]]:
-    data = await _json("https://open.er-api.com/v6/latest/USD")
-    rates = data.get("rates", {}) if isinstance(data, dict) else {}
-    usd: dict[str, float] = {"USD": 1.0}
-    usd.update({k: float(v) for k, v in rates.items() if isinstance(v, (int, float))})
-    result: dict[str, tuple[float, int]] = {}
-    for symbol in requested:
-        base, quote = FOREX_BASES[symbol]
-        if base in usd and quote in usd and usd[base] != 0:
-            result[symbol] = (usd[quote] / usd[base], _now_ms())
-    return result
-
-
-async def _crypto_one(symbol: str) -> tuple[str, float, float | None, int] | None:
-    pair = symbol.replace("USD", "USDT")
-    data = await _json("https://api.binance.com/api/v3/ticker/24hr", {"symbol": pair})
-    if isinstance(data, dict) and data.get("lastPrice") is not None:
-        return symbol, float(data["lastPrice"]), float(data.get("priceChangePercent", 0.0)), _now_ms()
-    return None
-
-
-async def _crypto_quotes(requested: list[str]) -> dict[str, tuple[float, float | None, int]]:
-    rows = await asyncio.gather(*(_crypto_one(symbol) for symbol in requested))
-    return {symbol: (price, change, ts) for row in rows if row for symbol, price, change, ts in [row]}
-
-
-async def _stock_one(symbol: str) -> tuple[str, float, int] | None:
-    ticker = STOOQ[symbol]
-    data = await _json("https://stooq.com/q/l/", {"s": ticker, "f": "sd2t2ohlcv", "h": "", "e": "json"})
-    rows = data.get("data", []) if isinstance(data, dict) else []
-    if rows:
-        close = rows[0].get("close")
-        if close not in (None, "N/D"):
-            return symbol, float(close), _now_ms()
-    return None
-
-
-async def _stock_quotes(requested: list[str]) -> dict[str, tuple[float, float | None, int]]:
-    rows = await asyncio.gather(*(_stock_one(symbol) for symbol in requested))
-    return {symbol: (price, None, ts) for row in rows if row for symbol, price, ts in [row]}
-
-
-async def _yahoo_oil_one(symbol: str) -> MarketQuote | None:
-    ticker = YAHOO_FUTURES[symbol]
+async def _yahoo_chart(symbol: str, range_: str = "1d", interval: str = "1m") -> dict:
+    yahoo = YAHOO_SYMBOLS[symbol]
     data = await _json(
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}",
-        {"range": "1d", "interval": "1m", "includePrePost": "true", "events": "div,splits"},
+        f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo}",
+        {"range": range_, "interval": interval, "includePrePost": "true", "events": "div,splits"},
     )
     chart = data.get("chart", {}) if isinstance(data, dict) else {}
-    result_rows = chart.get("result") or []
-    if not result_rows:
-        return None
-    result = result_rows[0]
+    rows = chart.get("result") or []
+    if not rows:
+        raise HTTPException(status_code=502, detail=f"Yahoo returned no data for {symbol} ({yahoo})")
+    return rows[0]
+
+
+async def _yahoo_quote(symbol: str) -> MarketQuote:
+    result = await _yahoo_chart(symbol, "1d", "1m")
     meta = result.get("meta", {})
     price = meta.get("regularMarketPrice")
+    timestamps = result.get("timestamp") or []
+    indicators = result.get("indicators", {})
+    quote_rows = indicators.get("quote") or []
+    quote = quote_rows[0] if quote_rows else {}
+    closes = quote.get("close") or []
     if price is None:
-        indicators = result.get("indicators", {})
-        quotes = indicators.get("quote") or []
-        closes = quotes[0].get("close") if quotes else None
-        if closes:
-            valid = [x for x in closes if x is not None]
-            price = valid[-1] if valid else None
+        valid = [x for x in closes if x is not None]
+        price = valid[-1] if valid else None
     if price is None:
-        return None
+        raise HTTPException(status_code=502, detail=f"Yahoo returned no price for {symbol}")
+
     previous = meta.get("previousClose")
     change = None
     if previous not in (None, 0):
         change = (float(price) - float(previous)) / float(previous) * 100.0
     market_time = meta.get("regularMarketTime")
+    if market_time is None and timestamps:
+        market_time = timestamps[-1]
     market_ms = int(market_time * 1000) if market_time else _now_ms()
+
     return MarketQuote(
         symbol=symbol,
         price=float(price),
         changePercent=change,
         marketTime=market_ms,
-        source="Yahoo Finance public chart endpoint",
-        # Yahoo's commodity/futures quote can be exchange-delayed. Do not label
-        # it as tick-real-time merely because the endpoint is polled every second.
+        source=f"Yahoo Finance ({YAHOO_SYMBOLS[symbol]})",
+        # Polling frequency does not make an exchange quote tick-real-time.
+        # Keep the flag honest where Yahoo may provide delayed exchange data.
         live=False,
-        freshness="Yahoo-futures-quote",
+        freshness="Yahoo-chart-quote",
     )
 
 
-async def _yahoo_oil_quotes(requested: list[str]) -> dict[str, MarketQuote]:
-    rows = await asyncio.gather(*(_yahoo_oil_one(symbol) for symbol in requested), return_exceptions=True)
-    result: dict[str, MarketQuote] = {}
-    for row in rows:
-        if isinstance(row, MarketQuote):
-            result[row.symbol] = row
-    return result
+async def _safe_yahoo_quote(symbol: str) -> MarketQuote | None:
+    try:
+        return await _yahoo_quote(symbol)
+    except HTTPException:
+        return None
 
 
 @app.get("/v1/quotes", response_model=list[MarketQuote])
@@ -207,42 +151,9 @@ async def quotes(symbols: str) -> list[MarketQuote]:
     unknown = [s for s in requested if s not in SYMBOLS]
     if unknown:
         raise HTTPException(status_code=404, detail=f"Unsupported symbols: {', '.join(unknown)}")
-    result: dict[str, MarketQuote] = {}
-
-    if "XAUUSD" in requested:
-        gold = await _gold_quote()
-        if gold is not None:
-            result["XAUUSD"] = gold
-
-    forex = [s for s in requested if s in FOREX_BASES]
-    if forex:
-        for symbol, (price, ts) in (await _forex_quotes(forex)).items():
-            result[symbol] = MarketQuote(
-                symbol=symbol, price=price, marketTime=ts,
-                source="open.er-api.com", live=False, freshness="reference-rate",
-            )
-
-    crypto = [s for s in requested if s in {"BTCUSD", "ETHUSD"}]
-    if crypto:
-        for symbol, (price, change, ts) in (await _crypto_quotes(crypto)).items():
-            result[symbol] = MarketQuote(
-                symbol=symbol, price=price, changePercent=change, marketTime=ts,
-                source="Binance public market-data API", live=True, freshness="real-time-public",
-            )
-
-    stocks = [s for s in requested if s in STOOQ]
-    if stocks:
-        for symbol, (price, change, ts) in (await _stock_quotes(stocks)).items():
-            result[symbol] = MarketQuote(
-                symbol=symbol, price=price, changePercent=change, marketTime=ts,
-                source="Stooq", live=False, freshness="provider-quote",
-            )
-
-    oil = [s for s in requested if s in YAHOO_FUTURES]
-    if oil:
-        result.update(await _yahoo_oil_quotes(oil))
-
-    return [result[s] for s in requested if s in result]
+    rows = await asyncio.gather(*(_safe_yahoo_quote(symbol) for symbol in requested))
+    by_symbol = {row.symbol: row for row in rows if row is not None}
+    return [by_symbol[s] for s in requested if s in by_symbol]
 
 
 @app.get("/v1/candles", response_model=list[Candle])
@@ -251,15 +162,36 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
     if symbol not in SYMBOLS:
         raise HTTPException(status_code=404, detail=f"Unsupported symbol: {symbol}")
     limit = max(21, min(limit, 1000))
-    if symbol in {"BTCUSD", "ETHUSD"}:
-        intervals = {"1min": "1m", "5min": "5m", "15min": "15m", "30min": "30m", "1h": "1h", "4h": "4h", "1day": "1d"}
-        interval = intervals.get(timeframe.lower())
-        if interval is None:
-            raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
-        pair = symbol.replace("USD", "USDT")
-        rows = await _json("https://api.binance.com/api/v3/klines", {"symbol": pair, "interval": interval, "limit": limit})
-        return [Candle(time=int(r[0]), open=float(r[1]), high=float(r[2]), low=float(r[3]), close=float(r[4]), volume=float(r[5])) for r in rows]
-    raise HTTPException(status_code=503, detail="Candles for this market require a historical-data provider; no fake candles are generated")
+    intervals = {
+        "1min": ("1d", "1m"), "5min": ("5d", "5m"), "15min": ("5d", "15m"),
+        "30min": ("1mo", "30m"), "1h": ("3mo", "1h"), "4h": ("6mo", "1h"),
+        "1day": ("2y", "1d"),
+    }
+    range_interval = intervals.get(timeframe.lower())
+    if range_interval is None:
+        raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
+    range_, interval = range_interval
+    result = await _yahoo_chart(symbol, range_, interval)
+    timestamps = result.get("timestamp") or []
+    indicators = result.get("indicators", {})
+    quote_rows = indicators.get("quote") or []
+    quote = quote_rows[0] if quote_rows else {}
+    opens, highs, lows, closes, volumes = (
+        quote.get("open") or [], quote.get("high") or [], quote.get("low") or [],
+        quote.get("close") or [], quote.get("volume") or [],
+    )
+    candles_out: list[Candle] = []
+    for i, ts in enumerate(timestamps):
+        values = (opens[i] if i < len(opens) else None, highs[i] if i < len(highs) else None,
+                  lows[i] if i < len(lows) else None, closes[i] if i < len(closes) else None)
+        if any(v is None for v in values):
+            continue
+        candles_out.append(Candle(
+            time=int(ts * 1000), open=float(values[0]), high=float(values[1]),
+            low=float(values[2]), close=float(values[3]),
+            volume=float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0,
+        ))
+    return candles_out[-limit:]
 
 
 @app.post("/v1/analyze", response_model=AnalysisResponse)
