@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.4")
+app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.5")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -104,15 +104,19 @@ def health() -> dict[str, str]:
 
 async def _yahoo_chart(symbol: str, range_: str = "1d", interval: str = "1m") -> dict:
     yahoo = YAHOO_SYMBOLS[symbol]
-    data = await _json(
-        f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo}",
-        {"range": range_, "interval": interval, "includePrePost": "true", "events": "div,splits"},
-    )
-    chart = data.get("chart", {}) if isinstance(data, dict) else {}
-    rows = chart.get("result") or []
-    if not rows:
-        raise HTTPException(status_code=502, detail=f"Yahoo returned no data for {symbol} ({yahoo})")
-    return rows[0]
+    params = {"range": range_, "interval": interval, "includePrePost": "true", "events": "div,splits"}
+    last_error: str | None = None
+    for host in ("query1.finance.yahoo.com", "query2.finance.yahoo.com"):
+        try:
+            data = await _json(f"https://{host}/v8/finance/chart/{yahoo}", params)
+            chart = data.get("chart", {}) if isinstance(data, dict) else {}
+            rows = chart.get("result") or []
+            if rows:
+                return rows[0]
+            last_error = f"Yahoo returned no data for {symbol} ({yahoo}) via {host}"
+        except HTTPException as exc:
+            last_error = str(exc.detail)
+    raise HTTPException(status_code=502, detail=str(last_error or f"Yahoo returned no data for {symbol} ({yahoo})"))
 
 
 async def _yahoo_quote(symbol: str) -> MarketQuote:
@@ -295,7 +299,6 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
 
 @app.get("/v1/self-test")
 async def self_test(symbol: str = "XAUUSD") -> dict:
-    """Run production-side Yahoo connectivity and candle-integrity checks."""
     symbol = symbol.upper().strip()
     if symbol not in SYMBOLS:
         raise HTTPException(status_code=404, detail=f"Unsupported symbol: {symbol}")
@@ -356,21 +359,20 @@ async def self_test(symbol: str = "XAUUSD") -> dict:
     }
 
 
-async def _startup_self_test() -> None:
-    await asyncio.sleep(1)
-    try:
-        result = await self_test("XAUUSD")
-        print("ISWAN_SELF_TEST=" + json.dumps(result, separators=(",", ":")), flush=True)
-    except Exception as exc:
-        print(f"ISWAN_SELF_TEST={{\"status\":\"FAIL\",\"error\":{json.dumps(str(exc))}}}", flush=True)
+@app.post("/v1/analyze", response_model=AnalysisResponse)
+async def analyze(request: AnalysisRequest) -> AnalysisResponse:
+    symbol = request.symbol.upper().strip()
+    if symbol not in SYMBOLS:
+        raise HTTPException(status_code=404, detail=f"Unsupported symbol: {symbol}")
+    closes = [c.close for c in request.candles]
+    result = analyze_closes(closes)
+    return AnalysisResponse(symbol=symbol, **result)
 
 
 @app.on_event("startup")
-async def _run_startup_self_test() -> None:
-    asyncio.create_task(_startup_self_test())
-
-
-@app.post("/v1/analyze", response_model=AnalysisResponse)
-def analyze(request: AnalysisRequest) -> AnalysisResponse:
-    result = analyze_closes([c.close for c in request.candles])
-    return AnalysisResponse(symbol=request.symbol.upper(), signal=result.signal, confidence=result.confidence, trend=result.trend, rsi=result.rsi)
+async def _startup_self_test() -> None:
+    try:
+        result = await self_test("XAUUSD")
+        print(f"ISWAN_SELF_TEST={json.dumps(result, separators=(',', ':'))}", flush=True)
+    except Exception as exc:
+        print(f"ISWAN_SELF_TEST={{\"status\":\"ERROR\",\"error\":{json.dumps(str(exc))}}}", flush=True)
