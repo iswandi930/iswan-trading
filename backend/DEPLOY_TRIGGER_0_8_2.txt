@@ -1,0 +1,2 @@
+Railway deployment verification marker for Yahoo backend 0.8.2.
+The active GitHub main branch contains backend/app.py version 0.8.1 with shared Yahoo HTTP client and forming-candle refresh.
