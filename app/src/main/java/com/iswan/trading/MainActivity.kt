@@ -155,8 +155,22 @@ private fun CandleChart(candles: List<Candle>) {
 @Composable
 private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository) {
     var data by remember { mutableStateOf<Map<String, AnalysisResult>>(emptyMap()) }
-    LaunchedEffect(Unit) { data = repo.getCandles(markets.map { it.symbol }, "1d").mapValues { analyze(it.value) } }
+    var refreshing by remember { mutableStateOf(false) }
+
+    LaunchedEffect(Unit) {
+        while (isActive) {
+            refreshing = true
+            val candles = repo.getCandles(markets.map { it.symbol }, "1d", "5m")
+            if (candles.isNotEmpty()) data = candles.mapValues { analyze(it.value) }
+            refreshing = false
+            delay(10000)
+        }
+    }
+
     LazyColumn(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            Text(if (refreshing) "ANALYSIS • memperbarui…" else "ANALYSIS • live refresh 10 detik", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+        }
         items(markets, key = { it.symbol }) { market ->
             val result = data[market.symbol]
             Card(Modifier.fillMaxWidth()) {
