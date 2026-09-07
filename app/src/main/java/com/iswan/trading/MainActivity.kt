@@ -22,6 +22,8 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
+private const val DEFAULT_BACKEND_URL = "https://iswan-market-backend-production.up.railway.app"
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -231,7 +233,7 @@ private fun SettingsScreen(pythonBaseUrl: String, onSavePythonUrl: (String) -> U
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             label = { Text("URL server backend") },
-            placeholder = { Text("https://alamat-server-kamu") }
+            placeholder = { Text(DEFAULT_BACKEND_URL) }
         )
         Button(
             onClick = {
@@ -246,7 +248,7 @@ private fun SettingsScreen(pythonBaseUrl: String, onSavePythonUrl: (String) -> U
             when {
                 saved && draftUrl.isNotBlank() -> "URL backend tersimpan. Harga dan candle akan memakai server ini."
                 draftUrl.isNotBlank() -> "Backend siap dikonfigurasi. Pastikan server dapat diakses dari internet oleh HP."
-                else -> "Backend belum terhubung. Analysis tetap bisa berjalan memakai mesin teknikal lokal, tetapi harga live memerlukan backend."
+                else -> "Backend otomatis menggunakan server Iswan Trading."
             },
             color = Color.Gray,
             style = MaterialTheme.typography.bodySmall
@@ -264,14 +266,14 @@ private fun toggleWatchlist(context: Context, current: Set<String>, symbol: Stri
 }
 
 private fun loadPythonBaseUrl(context: Context): String {
-    val url = context.getSharedPreferences("iswan", Context.MODE_PRIVATE).getString("python_base_url", "").orEmpty()
-    val normalized = url.trim().trimEnd('/')
+    val url = context.getSharedPreferences("iswan", Context.MODE_PRIVATE).getString("python_base_url", DEFAULT_BACKEND_URL).orEmpty()
+    val normalized = url.trim().trimEnd('/').ifBlank { DEFAULT_BACKEND_URL }
     BackendConfig.baseUrl = normalized
     return normalized
 }
 
 private fun savePythonBaseUrl(context: Context, url: String) {
-    val normalized = url.trim().trimEnd('/')
+    val normalized = url.trim().trimEnd('/').ifBlank { DEFAULT_BACKEND_URL }
     context.getSharedPreferences("iswan", Context.MODE_PRIVATE).edit().putString("python_base_url", normalized).apply()
     BackendConfig.baseUrl = normalized
 }
