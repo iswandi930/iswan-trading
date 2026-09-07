@@ -20,7 +20,7 @@ data class Candle(
 
 object MarketSymbolMapper {
     fun providerSymbol(symbol: String): String = when (symbol.uppercase()) {
-        "XAUUSD" -> "GC=F"
+        "XAUUSD" -> "XAUUSD=X"
         "EURUSD" -> "EURUSD=X"
         "GBPUSD" -> "GBPUSD=X"
         "USDJPY" -> "JPY=X"
@@ -33,7 +33,11 @@ object MarketSymbolMapper {
 }
 
 class CandleRepository {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .callTimeout(java.time.Duration.ofSeconds(8))
+        .connectTimeout(java.time.Duration.ofSeconds(5))
+        .readTimeout(java.time.Duration.ofSeconds(8))
+        .build()
 
     suspend fun getCandles(symbols: List<String>, range: String = "1d", interval: String = "5m"): Map<String, List<Candle>> = coroutineScope {
         symbols.map { symbol ->
@@ -48,8 +52,12 @@ class CandleRepository {
     private fun fetch(symbol: String, range: String, interval: String): List<Candle> {
         return try {
             val provider = MarketSymbolMapper.providerSymbol(symbol)
-            val url = "https://query1.finance.yahoo.com/v8/finance/chart/$provider?range=$range&interval=$interval"
-            val request = Request.Builder().url(url).header("User-Agent", "IswanTrading/0.2").build()
+            val url = "https://query1.finance.yahoo.com/v8/finance/chart/$provider?range=$range&interval=$interval&events=history"
+            val request = Request.Builder()
+                .url(url)
+                .header("User-Agent", "IswanTrading/0.3")
+                .header("Accept", "application/json")
+                .build()
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return emptyList()
                 val body = response.body?.string() ?: return emptyList()
@@ -67,7 +75,7 @@ class CandleRepository {
                         val h = high.optDouble(i, Double.NaN)
                         val l = low.optDouble(i, Double.NaN)
                         val c = close.optDouble(i, Double.NaN)
-                        if (!o.isNaN() && !h.isNaN() && !l.isNaN() && !c.isNaN()) {
+                        if (o.isFinite() && h.isFinite() && l.isFinite() && c.isFinite() && h >= maxOf(o, c) && l <= minOf(o, c)) {
                             add(Candle(timestamps.optLong(i) * 1000L, o, h, l, c, volume?.optDouble(i, 0.0) ?: 0.0))
                         }
                     }
