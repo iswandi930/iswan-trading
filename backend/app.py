@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.0")
+app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.1")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -30,6 +30,19 @@ YAHOO_SYMBOLS = {
     "META": "META", "TSLA": "TSLA", "SPY": "SPY", "QQQ": "QQQ",
 }
 
+YAHOO_HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+_yahoo_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(8.0, connect=3.0),
+    follow_redirects=True,
+    headers=YAHOO_HEADERS,
+    limits=httpx.Limits(max_connections=40, max_keepalive_connections=40),
+)
+
+
+@app.on_event("shutdown")
+async def _shutdown_yahoo_client() -> None:
+    await _yahoo_client.aclose()
+
 
 def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -37,10 +50,9 @@ def _now_ms() -> int:
 
 async def _json(url: str, params: dict | None = None) -> dict | list:
     try:
-        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True, headers={"User-Agent": "Mozilla/5.0"}) as client:
-            response = await client.get(url, params=params)
-            response.raise_for_status()
-            return response.json()
+        response = await _yahoo_client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
     except (httpx.HTTPError, ValueError) as exc:
         raise HTTPException(status_code=502, detail=f"Yahoo market provider connection error: {exc}") from exc
 
@@ -216,9 +228,8 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
     result = await _yahoo_chart(symbol, range_, interval)
     candles_out = _rows_to_candles(result, limit)
 
-    # Native Yahoo 5m/15m/etc. bars can remain visually unchanged until the bar closes.
-    # Refresh the currently forming intraday bar from Yahoo's latest 1m data so the
-    # chart follows Yahoo's movement without inventing/interpolating prices.
+    # Native Yahoo intraday bars can remain unchanged until the bar closes.
+    # Refresh the forming bar from Yahoo 1m data so the chart follows real source movement.
     minutes = {"1min": 1, "5min": 5, "15min": 15, "30min": 30}.get(timeframe.lower())
     if minutes is not None and timeframe.lower() != "1min":
         try:
