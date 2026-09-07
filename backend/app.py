@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import math
 import time
 from datetime import datetime, timezone
 
@@ -10,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.3")
+app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.4")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -227,7 +229,7 @@ def _validate_candles(rows: list[Candle]) -> dict:
     previous_time = None
     for i, row in enumerate(rows):
         values = (row.open, row.high, row.low, row.close, row.volume)
-        if not all(__import__("math").isfinite(v) for v in values):
+        if not all(math.isfinite(v) for v in values):
             errors.append(f"non-finite value at index {i}")
             continue
         if row.high < max(row.open, row.close) or row.low > min(row.open, row.close) or row.high < row.low:
@@ -293,11 +295,7 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
 
 @app.get("/v1/self-test")
 async def self_test(symbol: str = "XAUUSD") -> dict:
-    """Run production-side Yahoo connectivity and candle-integrity checks.
-
-    This endpoint is intentionally read-only. It verifies every Android chart timeframe
-    using the same code path as production and never invents prices.
-    """
+    """Run production-side Yahoo connectivity and candle-integrity checks."""
     symbol = symbol.upper().strip()
     if symbol not in SYMBOLS:
         raise HTTPException(status_code=404, detail=f"Unsupported symbol: {symbol}")
@@ -356,6 +354,20 @@ async def self_test(symbol: str = "XAUUSD") -> dict:
         "noFakePrices": True,
         "tests": tests,
     }
+
+
+async def _startup_self_test() -> None:
+    await asyncio.sleep(1)
+    try:
+        result = await self_test("XAUUSD")
+        print("ISWAN_SELF_TEST=" + json.dumps(result, separators=(",", ":")), flush=True)
+    except Exception as exc:
+        print(f"ISWAN_SELF_TEST={{\"status\":\"FAIL\",\"error\":{json.dumps(str(exc))}}}", flush=True)
+
+
+@app.on_event("startup")
+async def _run_startup_self_test() -> None:
+    asyncio.create_task(_startup_self_test())
 
 
 @app.post("/v1/analyze", response_model=AnalysisResponse)
