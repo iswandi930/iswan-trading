@@ -40,6 +40,7 @@ class CandleRepository {
                 "15m" -> "15Min"
                 "30m" -> "30Min"
                 "1h" -> "1Hour"
+                "4h" -> "4Hour"
                 "1d" -> "1Day"
                 else -> "5Min"
             }
