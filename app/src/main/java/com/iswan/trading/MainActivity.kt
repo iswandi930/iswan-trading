@@ -14,174 +14,91 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Offset
+import androidx.compose.ui.graphics.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 
-private data class Market(val symbol: String, val name: String, val category: String, val price: Double? = null, val change: Double? = null)
-private enum class Signal { BUY, SELL, NEUTRAL }
-private data class AnalysisResult(val signal: Signal, val confidence: Int, val rsi: Double?, val trend: String)
-
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { IswanTradingApp() }
+        setContent { IswanTradingApp(applicationContext) }
     }
-}
-
-private fun analyze(c: List<Candle>): AnalysisResult {
-    if (c.size < 30) return AnalysisResult(Signal.NEUTRAL, 0, null, "Insufficient data")
-    val closes = c.map { it.close }
-    val sma20 = closes.takeLast(20).average()
-    val ema9 = ema(closes, 9)
-    val ema21 = ema(closes, 21)
-    val rsiValue = rsi(closes, 14)
-    var score = 0
-    if (ema9 > ema21) score++ else score--
-    if (closes.last() > sma20) score++ else score--
-    if (rsiValue != null) {
-        if (rsiValue < 35) score++ else if (rsiValue > 65) score--
-    }
-    val signal = when {
-        score >= 2 -> Signal.BUY
-        score <= -2 -> Signal.SELL
-        else -> Signal.NEUTRAL
-    }
-    return AnalysisResult(signal, (50 + kotlin.math.abs(score) * 12).coerceAtMost(86), rsiValue, if (ema9 >= ema21) "Bullish" else "Bearish")
-}
-
-private fun ema(values: List<Double>, period: Int): Double {
-    val k = 2.0 / (period + 1)
-    var result = values.take(period).average()
-    values.drop(period).forEach { result = it * k + result * (1 - k) }
-    return result
-}
-
-private fun rsi(values: List<Double>, period: Int): Double? {
-    if (values.size <= period) return null
-    var gain = 0.0
-    var loss = 0.0
-    for (i in values.size - period until values.size) {
-        val d = values[i] - values[i - 1]
-        if (d >= 0) gain += d else loss -= d
-    }
-    if (loss == 0.0) return 100.0
-    return 100.0 - 100.0 / (1.0 + gain / loss)
 }
 
 @Composable
-fun IswanTradingApp() {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var selected by remember { mutableStateOf("Markets") }
-    var selectedMarket by remember { mutableStateOf<Market?>(null) }
-    var prices by remember { mutableStateOf<Map<String, MarketQuote>>(emptyMap()) }
-    var watchlist by remember { mutableStateOf(loadWatchlist(context)) }
+private fun IswanTradingApp(context: Context) {
     val repository = remember { MarketRepository() }
     val candleRepository = remember { CandleRepository() }
-    val markets = remember {
-        listOf(
-            Market("XAUUSD", "Gold / US Dollar", "Metals"),
-            Market("EURUSD", "Euro / US Dollar", "Forex"),
-            Market("GBPUSD", "Pound / US Dollar", "Forex"),
-            Market("USDJPY", "US Dollar / Yen", "Forex"),
-            Market("BTCUSDT", "Bitcoin / USDT", "Crypto"),
-            Market("ETHUSDT", "Ethereum / USDT", "Crypto"),
-            Market("NAS100", "Nasdaq 100", "Index"),
-            Market("US30", "Dow Jones", "Index")
-        )
-    }
+    var screen by remember { mutableStateOf("Markets") }
+    var selected by remember { mutableStateOf<String?>(null) }
+    var prices by remember { mutableStateOf<Map<String, MarketQuote>>(emptyMap()) }
+    var watchlist by remember { mutableStateOf(loadWatchlist(context)) }
+
+    val markets = remember { MarketCatalog.markets }
 
     LaunchedEffect(Unit) {
         while (isActive) {
             val next = repository.getPrices(markets.map { it.symbol })
             if (next.isNotEmpty()) prices = next
-            delay(1_000)
+            delay(1000)
         }
     }
 
-    MaterialTheme(colorScheme = darkColorScheme(background = Color(0xFF0B0F14), surface = Color(0xFF111820))) {
-        Scaffold(
-            bottomBar = {
-                NavigationBar {
-                    listOf("Markets", "Watchlist", "Analysis", "Settings").forEach { item ->
-                        NavigationBarItem(
-                            selected = selected == item,
-                            onClick = { selected = item; selectedMarket = null },
-                            icon = { Text(item.take(1)) },
-                            label = { Text(item) }
-                        )
+    MaterialTheme(darkColorScheme()) {
+        Surface(Modifier.fillMaxSize()) {
+            Column {
+                if (selected == null) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text("ISWAN TRADING", fontWeight = FontWeight.Bold)
+                        Text(if (prices.isNotEmpty()) "● DATA LIVE" else "● CONNECTING", color = Color.Gray)
                     }
-                }
-            }
-        ) { pad ->
-            Column(Modifier.fillMaxSize().background(Color(0xFF0B0F14)).padding(pad)) {
-                Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("ISWAN TRADING", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
-                        Text("Market terminal", color = Color.Gray)
+                    when (screen) {
+                        "Markets" -> MarketsScreen(markets, prices, watchlist) { selected = it }
+                        "Watchlist" -> MarketsScreen(markets.filter { watchlist.contains(it.symbol) }, prices, watchlist) { selected = it }
+                        "Analysis" -> AnalysisScreen(markets, candleRepository)
+                        else -> SettingsScreen()
                     }
-                    Text(
-                        if (prices.isNotEmpty()) "● DATA LIVE" else "● CONNECTING",
-                        color = if (prices.isNotEmpty()) Color(0xFF66BB6A) else Color(0xFFFFB74D),
-                        style = MaterialTheme.typography.labelSmall
-                    )
-                }
-                when (selected) {
-                    "Markets" -> if (selectedMarket == null) {
-                        MarketList(
-                            markets.map { it.copy(price = prices[it.symbol]?.price, change = prices[it.symbol]?.changePercent) },
-                            watchlist,
-                            { s -> watchlist = toggleWatch(context, watchlist, s) }
-                        ) { selectedMarket = it }
-                    } else {
-                        MarketDetail(
-                            selectedMarket!!.copy(
-                                price = prices[selectedMarket!!.symbol]?.price,
-                                change = prices[selectedMarket!!.symbol]?.changePercent
-                            ),
-                            candleRepository,
-                            watchlist.contains(selectedMarket!!.symbol),
-                            { watchlist = toggleWatch(context, watchlist, selectedMarket!!.symbol) }
-                        ) { selectedMarket = null }
+                    NavigationBar {
+                        listOf("Markets", "Watchlist", "Analysis", "Settings").forEach { item ->
+                            NavigationBarItem(selected = screen == item, onClick = { screen = item }, icon = { Text(item.take(1)) }, label = { Text(item) })
+                        }
                     }
-                    "Watchlist" -> MarketList(
-                        markets.filter { watchlist.contains(it.symbol) }
-                            .map { it.copy(price = prices[it.symbol]?.price, change = prices[it.symbol]?.changePercent) },
-                        watchlist,
-                        { s -> watchlist = toggleWatch(context, watchlist, s) }
-                    ) { selectedMarket = it }
-                    "Analysis" -> AnalysisScreen(markets, candleRepository)
-                    else -> SettingsScreen()
+                } else {
+                    MarketDetailScreen(selected!!, prices[selected], candleRepository) { selected = null }
                 }
             }
         }
     }
+
+    DisposableEffect(Unit) { onDispose { repository.close() } }
 }
 
 @Composable
-private fun MarketList(markets: List<Market>, watchlist: Set<String>, onWatch: (String) -> Unit, onClick: (Market) -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        item { Text("MARKETS", color = Color.Gray, style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(4.dp)) }
-        items(markets) { market ->
-            Card(Modifier.fillMaxWidth().clickable { onClick(market) }) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        if (watchlist.contains(market.symbol)) "★" else "☆",
-                        modifier = Modifier.clickable { onWatch(market.symbol) }.padding(end = 12.dp),
-                        style = MaterialTheme.typography.titleMedium
-                    )
+private fun MarketsScreen(markets: List<Market>, prices: Map<String, MarketQuote>, watchlist: Set<String>, onSelect: (String) -> Unit) {
+    LazyColumn(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items(markets, key = { it.symbol }) { market ->
+            val quote = prices[market.symbol]
+            Card(Modifier.fillMaxWidth().clickable { onSelect(market.symbol) }) {
+                Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
                         Text(market.symbol, fontWeight = FontWeight.Bold)
                         Text(market.name, color = Color.Gray)
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text(market.price?.let { "%.5f".format(it) } ?: "—")
-                        Text(market.change?.let { "%+.2f%%".format(it) } ?: "Waiting", color = if ((market.change ?: 0.0) >= 0) Color(0xFF66BB6A) else Color(0xFFEF5350), style = MaterialTheme.typography.labelSmall)
+                        Text(quote?.price?.let { "%.5f".format(it) } ?: "—", fontWeight = FontWeight.Bold)
+                        Text(quote?.changePercent?.let { "%+.2f%%".format(it) } ?: "—", color = Color.Gray)
                     }
+                    Spacer(Modifier.width(10.dp))
+                    Text(if (watchlist.contains(market.symbol)) "★" else "☆")
                 }
             }
         }
@@ -189,42 +106,21 @@ private fun MarketList(markets: List<Market>, watchlist: Set<String>, onWatch: (
 }
 
 @Composable
-private fun MarketDetail(market: Market, repo: CandleRepository, starred: Boolean, onStar: () -> Unit, back: () -> Unit) {
-    var candles by remember(market.symbol) { mutableStateOf<List<Candle>>(emptyList()) }
+private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: CandleRepository, onBack: () -> Unit) {
     var range by remember { mutableStateOf("1d") }
-    LaunchedEffect(market.symbol, range) { candles = repo.getCandles(market.symbol, range, "5m") }
-    val result = remember(candles) { analyze(candles) }
-
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("‹  Kembali", modifier = Modifier.clickable { back() }, color = MaterialTheme.colorScheme.primary)
-            Spacer(Modifier.weight(1f))
-            Text(if (starred) "★" else "☆", modifier = Modifier.clickable { onStar() }, style = MaterialTheme.typography.titleLarge)
+    var candles by remember(symbol, range) { mutableStateOf<List<Candle>>(emptyList()) }
+    LaunchedEffect(symbol, range) { candles = repo.getCandles(listOf(symbol), range)[symbol].orEmpty() }
+    Column(Modifier.fillMaxSize().padding(14.dp)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Text("‹  $symbol", fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBack() })
+            Text(quote?.price?.let { "%.5f".format(it) } ?: "—")
         }
-        Spacer(Modifier.height(12.dp))
-        Text(market.symbol, style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
-        Text(market.name, color = Color.Gray)
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(market.price?.let { "%.5f".format(it) } ?: "—", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.width(12.dp))
-            Text(market.change?.let { "%+.2f%%".format(it) } ?: "—")
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(quote?.changePercent?.let { "%+.2f%%".format(it) } ?: "—", color = Color.Gray)
+        Row(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("1d", "5d", "1mo").forEach { r -> FilterChip(selected = range == r, onClick = { range = r }, label = { Text(r) }) }
         }
-        Spacer(Modifier.height(10.dp))
-        Card(Modifier.fillMaxWidth().height(300.dp)) {
-            if (candles.isNotEmpty()) CandleChart(candles) else Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text("Memuat candle…", color = Color.Gray) }
-        }
-        Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("SIGNAL", fontWeight = FontWeight.Bold)
-            Text(result.signal.name, fontWeight = FontWeight.Bold)
-            Text("${result.confidence}%")
-        }
-        Text("Trend: ${result.trend}   RSI: ${result.rsi?.let { "%.1f".format(it) } ?: "—"}", color = Color.Gray)
-        Text("Sinyal adalah skor teknikal, bukan jaminan profit. Akurasi harus divalidasi dengan backtest.", color = Color.Gray, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 6.dp))
+        Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) { CandleChart(candles) }
+        Text("Sinyal adalah skor teknikal, bukan jaminan profit. Akurasi harus divalidasi dengan backtest.", color = Color.Gray, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
     }
 }
 
@@ -240,10 +136,10 @@ private fun CandleChart(candles: List<Candle>) {
         fun y(price: Double): Float = size.height - (((price - minPrice) / span) * size.height).toFloat()
         visible.forEachIndexed { index, candle ->
             val x = step * (index + 0.5f)
-            drawLine(Offset(x, y(candle.high)), Offset(x, y(candle.low)), Color.White, 1.5f)
+            drawLine(Color.White, Offset(x, y(candle.high)), Offset(x, y(candle.low)), strokeWidth = 1.5f)
             val top = y(maxOf(candle.open, candle.close))
             val bottom = y(minOf(candle.open, candle.close))
-            drawRect(Color.White, Offset(x - step * 0.3f, top), Size(step * 0.6f, (bottom - top).coerceAtLeast(2f)))
+            drawRect(Color.White, topLeft = Offset(x - step * 0.3f, top), size = Size(step * 0.6f, (bottom - top).coerceAtLeast(2f)))
         }
     }
 }
@@ -251,39 +147,43 @@ private fun CandleChart(candles: List<Candle>) {
 @Composable
 private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository) {
     var data by remember { mutableStateOf<Map<String, AnalysisResult>>(emptyMap()) }
-    LaunchedEffect(Unit) { data = repo.getCandles(markets.map { it.symbol }).mapValues { analyze(it.value) } }
+    LaunchedEffect(Unit) { data = repo.getCandles(markets.map { it.symbol }, "1d").mapValues { analyze(it.value) } }
     LazyColumn(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items(markets) { market ->
-            val analysis = data[market.symbol]
+        items(markets, key = { it.symbol }) { market ->
+            val result = data[market.symbol]
             Card(Modifier.fillMaxWidth()) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(market.symbol, fontWeight = FontWeight.Bold)
-                        Text("Trend ${analysis?.trend ?: "Loading"} • RSI ${analysis?.rsi?.let { "%.1f".format(it) } ?: "—"}", color = Color.Gray)
-                    }
-                    Text(analysis?.let { "${it.signal} ${it.confidence}%" } ?: "…", fontWeight = FontWeight.Bold)
+                Column(Modifier.padding(14.dp)) {
+                    Text(market.symbol, fontWeight = FontWeight.Bold)
+                    Text(result?.let { "${it.signal.name}  ${it.confidence}%" } ?: "Mengambil data…")
+                    Text(result?.let { "Trend: ${it.trend}   RSI: ${it.rsi?.let { v -> "%.1f".format(v) } ?: "—"}" } ?: "", color = Color.Gray)
                 }
             }
         }
     }
 }
 
-@Composable
-private fun SettingsScreen() {
-    Column(Modifier.fillMaxSize().padding(20.dp)) {
+@Composable private fun SettingsScreen() {
+    Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(14.dp))
-        Text("Refresh harga: 1 detik", fontWeight = FontWeight.Bold)
-        Text("Feed menggunakan data pasar publik; waktu pembaruan mengikuti penyedia data. Integrasi feed broker MT4 membutuhkan API/bridge broker.", color = Color.Gray, modifier = Modifier.padding(top = 8.dp))
-        Spacer(Modifier.height(16.dp))
-        Text("Versi: 0.3", color = Color.Gray)
+        Text("Refresh harga: 1 detik")
+        Text("Data pasar berasal dari feed publik internet. Waktu dan ketersediaan harga dapat berbeda menurut instrumen/provider.")
+        Text("Integrasi MT4 broker memerlukan API/bridge broker yang sesuai.", color = Color.Gray)
     }
 }
 
-private fun loadWatchlist(context: Context): Set<String> = context.getSharedPreferences("iswan_trading", Context.MODE_PRIVATE).getStringSet("watchlist", emptySet()) ?: emptySet()
-
-private fun toggleWatch(context: Context, current: Set<String>, symbol: String): Set<String> {
-    val next = current.toMutableSet().apply { if (!add(symbol)) remove(symbol) }
-    context.getSharedPreferences("iswan_trading", Context.MODE_PRIVATE).edit().putStringSet("watchlist", next).apply()
-    return next
+private fun loadWatchlist(context: Context): Set<String> = context.getSharedPreferences("iswan", Context.MODE_PRIVATE).getStringSet("watchlist", emptySet()) ?: emptySet()
+private fun analyze(candles: List<Candle>): AnalysisResult {
+    if (candles.isEmpty()) return AnalysisResult(Signal.NEUTRAL, 0, "N/A", null)
+    val closes = candles.map { it.close }
+    val ema9 = ema(closes, 9); val ema21 = ema(closes, 21); val sma20 = closes.takeLast(20).average(); val rsi = rsi(closes, 14)
+    val bullish = ema9 > ema21 && closes.last() > sma20 && (rsi == null || rsi < 70)
+    val bearish = ema9 < ema21 && closes.last() < sma20 && (rsi == null || rsi > 30)
+    val signal = when { bullish -> Signal.BUY; bearish -> Signal.SELL; else -> Signal.NEUTRAL }
+    val confidence = listOf(ema9 > ema21, closes.last() > sma20, rsi != null && rsi > 50).count { it } * 25
+    return AnalysisResult(signal, confidence, if (ema9 >= ema21) "BULLISH" else "BEARISH", rsi)
 }
+private fun ema(values: List<Double>, period: Int): Double { val k = 2.0 / (period + 1); var e = values.take(period).average(); for (v in values.drop(period)) e = v * k + e * (1 - k); return e }
+private fun rsi(values: List<Double>, period: Int): Double? { if (values.size <= period) return null; var gain = 0.0; var loss = 0.0; for (i in 1..period) { val d = values[i] - values[i-1]; if (d >= 0) gain += d else loss -= d }; gain /= period; loss /= period; for (i in period+1 until values.size) { val d = values[i] - values[i-1]; gain = (gain*(period-1) + maxOf(d,0.0))/period; loss = (loss*(period-1) + maxOf(-d,0.0))/period }; return if (loss == 0.0) 100.0 else 100.0 - 100.0/(1.0 + gain/loss) }
+
+enum class Signal { BUY, SELL, NEUTRAL }
+data class AnalysisResult(val signal: Signal, val confidence: Int, val trend: String, val rsi: Double?)
