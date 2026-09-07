@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.7.0")
+app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.0")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -18,7 +18,6 @@ SYMBOLS = {
     "AAPL", "MSFT", "NVDA", "AMZN", "META", "TSLA", "SPY", "QQQ",
 }
 
-# Yahoo Finance chart symbols. The app's displayed market symbols remain unchanged.
 YAHOO_SYMBOLS = {
     "XAUUSD": "GC=F", "USOIL": "CL=F", "UKOIL": "BZ=F",
     "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "JPY=X", "USDCHF": "CHF=X",
@@ -131,8 +130,6 @@ async def _yahoo_quote(symbol: str) -> MarketQuote:
         changePercent=change,
         marketTime=market_ms,
         source=f"Yahoo Finance ({YAHOO_SYMBOLS[symbol]})",
-        # Polling frequency does not make an exchange quote tick-real-time.
-        # Keep the flag honest where Yahoo may provide delayed exchange data.
         live=False,
         freshness="Yahoo-chart-quote",
     )
@@ -143,6 +140,51 @@ async def _safe_yahoo_quote(symbol: str) -> MarketQuote | None:
         return await _yahoo_quote(symbol)
     except HTTPException:
         return None
+
+
+def _rows_to_candles(result: dict, limit: int) -> list[Candle]:
+    timestamps = result.get("timestamp") or []
+    indicators = result.get("indicators", {})
+    quote_rows = indicators.get("quote") or []
+    quote = quote_rows[0] if quote_rows else {}
+    opens, highs, lows, closes, volumes = (
+        quote.get("open") or [], quote.get("high") or [], quote.get("low") or [],
+        quote.get("close") or [], quote.get("volume") or [],
+    )
+    out: list[Candle] = []
+    for i, ts in enumerate(timestamps):
+        values = (
+            opens[i] if i < len(opens) else None,
+            highs[i] if i < len(highs) else None,
+            lows[i] if i < len(lows) else None,
+            closes[i] if i < len(closes) else None,
+        )
+        if any(v is None for v in values):
+            continue
+        out.append(Candle(
+            time=int(ts * 1000), open=float(values[0]), high=float(values[1]),
+            low=float(values[2]), close=float(values[3]),
+            volume=float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0,
+        ))
+    return out[-limit:]
+
+
+def _aggregate_current_bucket(one_minute: list[Candle], minutes: int) -> Candle | None:
+    if not one_minute:
+        return None
+    bucket_ms = minutes * 60_000
+    bucket_start = (one_minute[-1].time // bucket_ms) * bucket_ms
+    rows = [c for c in one_minute if (c.time // bucket_ms) * bucket_ms == bucket_start]
+    if not rows:
+        return None
+    return Candle(
+        time=bucket_start,
+        open=rows[0].open,
+        high=max(c.high for c in rows),
+        low=min(c.low for c in rows),
+        close=rows[-1].close,
+        volume=sum(c.volume for c in rows),
+    )
 
 
 @app.get("/v1/quotes", response_model=list[MarketQuote])
@@ -172,26 +214,26 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
         raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
     range_, interval = range_interval
     result = await _yahoo_chart(symbol, range_, interval)
-    timestamps = result.get("timestamp") or []
-    indicators = result.get("indicators", {})
-    quote_rows = indicators.get("quote") or []
-    quote = quote_rows[0] if quote_rows else {}
-    opens, highs, lows, closes, volumes = (
-        quote.get("open") or [], quote.get("high") or [], quote.get("low") or [],
-        quote.get("close") or [], quote.get("volume") or [],
-    )
-    candles_out: list[Candle] = []
-    for i, ts in enumerate(timestamps):
-        values = (opens[i] if i < len(opens) else None, highs[i] if i < len(highs) else None,
-                  lows[i] if i < len(lows) else None, closes[i] if i < len(closes) else None)
-        if any(v is None for v in values):
-            continue
-        candles_out.append(Candle(
-            time=int(ts * 1000), open=float(values[0]), high=float(values[1]),
-            low=float(values[2]), close=float(values[3]),
-            volume=float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0,
-        ))
-    return candles_out[-limit:]
+    candles_out = _rows_to_candles(result, limit)
+
+    # Native Yahoo 5m/15m/etc. bars can remain visually unchanged until the bar closes.
+    # Refresh the currently forming intraday bar from Yahoo's latest 1m data so the
+    # chart follows Yahoo's movement without inventing/interpolating prices.
+    minutes = {"1min": 1, "5min": 5, "15min": 15, "30min": 30}.get(timeframe.lower())
+    if minutes is not None and timeframe.lower() != "1min":
+        try:
+            live_result = await _yahoo_chart(symbol, "1d", "1m")
+            live_rows = _rows_to_candles(live_result, 1000)
+            current = _aggregate_current_bucket(live_rows, minutes)
+            if current is not None:
+                if candles_out and candles_out[-1].time == current.time:
+                    candles_out[-1] = current
+                elif not candles_out or current.time > candles_out[-1].time:
+                    candles_out.append(current)
+                candles_out = candles_out[-limit:]
+        except HTTPException:
+            pass
+    return candles_out
 
 
 @app.post("/v1/analyze", response_model=AnalysisResponse)
