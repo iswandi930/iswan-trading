@@ -60,7 +60,10 @@ private fun IswanTradingApp(context: Context) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Text("ISWAN TRADING", fontWeight = FontWeight.Bold)
-                        Text(if (prices.isNotEmpty()) "● DATA LIVE" else "● CONNECTING", color = Color.Gray)
+                        Text(
+                            if (prices.isNotEmpty()) "● YAHOO • UPDATE 1s" else "● CONNECTING",
+                            color = Color.Gray
+                        )
                     }
                     when (screen) {
                         "Markets" -> MarketsScreen(markets, prices, watchlist, { selected = it }) { symbol ->
@@ -123,9 +126,15 @@ private fun MarketsScreen(
 private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: CandleRepository, onBack: () -> Unit) {
     var range by remember { mutableStateOf("1d") }
     var candles by remember(symbol, range) { mutableStateOf<List<Candle>>(emptyList()) }
-    LaunchedEffect(symbol, range) {
+    val interval = when (range) {
+        "1d" -> "5m"
+        "5d" -> "15m"
+        "1mo" -> "30m"
+        else -> "5m"
+    }
+    LaunchedEffect(symbol, range, interval) {
         while (isActive) {
-            val next = repo.getCandles(symbol, range, "5m")
+            val next = repo.getCandles(symbol, range, interval)
             if (next.isNotEmpty()) candles = next
             delay(1000)
         }
@@ -136,6 +145,7 @@ private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: Candle
             Text(quote?.price?.let { "%.5f".format(it) } ?: "—")
         }
         Text(quote?.changePercent?.let { "%+.2f%%".format(it) } ?: "—", color = Color.Gray)
+        Text("Yahoo Finance • $interval • refresh 1 detik", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
         Row(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("1d", "5d", "1mo").forEach { r -> FilterChip(selected = range == r, onClick = { range = r }, label = { Text(r) }) }
         }
@@ -223,9 +233,10 @@ private fun SettingsScreen(pythonBaseUrl: String, onSavePythonUrl: (String) -> U
 
     Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Sumber harga: Twelve Data")
-        Text("Refresh harga aplikasi: 1 detik")
-        Text("Twelve Data API key tetap berada di backend, bukan di APK.")
+        Text("Sumber harga & candle: Yahoo Finance")
+        Text("Refresh data aplikasi: 1 detik")
+        Text("Aplikasi mengambil quote dan candle dari backend yang memakai Yahoo Finance.")
+        Text("Catatan: refresh 1 detik tidak mengubah feed Yahoo yang mungkin tertunda untuk instrumen tertentu.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
         Text("Python / Market Backend", fontWeight = FontWeight.Bold)
         OutlinedTextField(
             value = draftUrl,
