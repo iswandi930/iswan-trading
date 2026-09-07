@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone
 
 import httpx
@@ -9,7 +10,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.2")
+app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.3")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -221,6 +222,22 @@ def _aggregate_current_bucket(one_minute: list[Candle], minutes: int) -> Candle 
     )
 
 
+def _validate_candles(rows: list[Candle]) -> dict:
+    errors: list[str] = []
+    previous_time = None
+    for i, row in enumerate(rows):
+        values = (row.open, row.high, row.low, row.close, row.volume)
+        if not all(__import__("math").isfinite(v) for v in values):
+            errors.append(f"non-finite value at index {i}")
+            continue
+        if row.high < max(row.open, row.close) or row.low > min(row.open, row.close) or row.high < row.low:
+            errors.append(f"invalid OHLC relationship at index {i}")
+        if previous_time is not None and row.time <= previous_time:
+            errors.append(f"timestamps not strictly increasing at index {i}")
+        previous_time = row.time
+    return {"valid": not errors, "errors": errors[:10]}
+
+
 @app.get("/v1/quotes", response_model=list[MarketQuote])
 async def quotes(symbols: str) -> list[MarketQuote]:
     requested = [s.strip().upper() for s in symbols.split(",") if s.strip()]
@@ -251,14 +268,12 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
     result = await _yahoo_chart(symbol, range_, interval)
     raw = _rows_to_candles(result, 1000 if key == "4h" else limit)
 
-    # Yahoo does not expose a native 4H bar. Build exact 4-hour candles from Yahoo 1H bars.
     if key == "4h":
         raw = _aggregate_buckets(raw, 240)
         return raw[-limit:]
 
     candles_out = raw[-limit:]
 
-    # Refresh the currently forming intraday candle from Yahoo 1m data so the chart follows source movement.
     minutes = {"1min": 1, "5min": 5, "15min": 15, "30min": 30}.get(key)
     if minutes is not None and key != "1min":
         try:
@@ -274,6 +289,73 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
         except HTTPException:
             pass
     return candles_out
+
+
+@app.get("/v1/self-test")
+async def self_test(symbol: str = "XAUUSD") -> dict:
+    """Run production-side Yahoo connectivity and candle-integrity checks.
+
+    This endpoint is intentionally read-only. It verifies every Android chart timeframe
+    using the same code path as production and never invents prices.
+    """
+    symbol = symbol.upper().strip()
+    if symbol not in SYMBOLS:
+        raise HTTPException(status_code=404, detail=f"Unsupported symbol: {symbol}")
+
+    tests: dict[str, dict] = {}
+    overall = True
+
+    quote_started = time.perf_counter()
+    try:
+        quote = await _yahoo_quote(symbol)
+        quote_ok = quote.price > 0 and quote.marketTime is not None
+        tests["quote"] = {
+            "ok": quote_ok,
+            "price": quote.price,
+            "marketTime": quote.marketTime,
+            "source": quote.source,
+            "freshness": quote.freshness,
+            "latencyMs": round((time.perf_counter() - quote_started) * 1000, 1),
+        }
+        overall &= quote_ok
+    except HTTPException as exc:
+        tests["quote"] = {"ok": False, "error": str(exc.detail), "latencyMs": round((time.perf_counter() - quote_started) * 1000, 1)}
+        overall = False
+
+    timeframe_map = {"1M": "1min", "5M": "5min", "15M": "15min", "30M": "30min", "1H": "1h", "4H": "4h", "1D": "1day"}
+    for label, key in timeframe_map.items():
+        started = time.perf_counter()
+        try:
+            rows = await candles(symbol, key, 80)
+            validation = _validate_candles(rows)
+            enough = len(rows) >= 21
+            ok = validation["valid"] and enough
+            tests[label] = {
+                "ok": ok,
+                "timeframe": key,
+                "count": len(rows),
+                "latestTime": rows[-1].time if rows else None,
+                "latestClose": rows[-1].close if rows else None,
+                "ohlc": validation,
+                "enoughData": enough,
+                "latencyMs": round((time.perf_counter() - started) * 1000, 1),
+            }
+            overall &= ok
+        except HTTPException as exc:
+            tests[label] = {"ok": False, "timeframe": key, "error": str(exc.detail), "latencyMs": round((time.perf_counter() - started) * 1000, 1)}
+            overall = False
+        except Exception as exc:
+            tests[label] = {"ok": False, "timeframe": key, "error": f"Unexpected error: {exc}", "latencyMs": round((time.perf_counter() - started) * 1000, 1)}
+            overall = False
+
+    return {
+        "status": "PASS" if overall else "FAIL",
+        "symbol": symbol,
+        "provider": "Yahoo Finance chart endpoint",
+        "testedAt": _now_ms(),
+        "noFakePrices": True,
+        "tests": tests,
+    }
 
 
 @app.post("/v1/analyze", response_model=AnalysisResponse)
