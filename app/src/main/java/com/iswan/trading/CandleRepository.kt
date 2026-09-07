@@ -23,13 +23,34 @@ class CandleRepository {
         .readTimeout(7, TimeUnit.SECONDS)
         .build()
 
+    @Volatile
+    var lastError: String? = null
+        private set
+
     suspend fun getCandles(symbols: List<String>, range: String = "1d", interval: String = "5m"): Map<String, List<Candle>> = withContext(Dispatchers.IO) {
-        if (BackendConfig.baseUrl.isBlank()) return@withContext emptyMap()
-        symbols.mapNotNull { symbol -> fetch(symbol, interval).takeIf { it.isNotEmpty() }?.let { symbol to it } }.toMap()
+        if (symbols.isEmpty()) {
+            lastError = null
+            return@withContext emptyMap()
+        }
+        if (BackendConfig.baseUrl.isBlank()) {
+            lastError = "Backend URL belum dikonfigurasi"
+            return@withContext emptyMap()
+        }
+        val result = symbols.mapNotNull { symbol -> fetch(symbol, interval).takeIf { it.isNotEmpty() }?.let { symbol to it } }.toMap()
+        if (result.isEmpty() && lastError == null) lastError = "Server candle tidak mengembalikan data"
+        else if (result.isNotEmpty()) lastError = null
+        result
     }
 
     suspend fun getCandles(symbol: String, range: String = "1d", interval: String = "5m"): List<Candle> = withContext(Dispatchers.IO) {
-        if (BackendConfig.baseUrl.isBlank()) emptyList() else fetch(symbol, interval)
+        if (BackendConfig.baseUrl.isBlank()) {
+            lastError = "Backend URL belum dikonfigurasi"
+            return@withContext emptyList()
+        }
+        val result = fetch(symbol, interval)
+        if (result.isEmpty() && lastError == null) lastError = "Server candle tidak mengembalikan data untuk $symbol"
+        else if (result.isNotEmpty()) lastError = null
+        result
     }
 
     private fun fetch(symbol: String, interval: String): List<Candle> {
@@ -47,22 +68,28 @@ class CandleRepository {
             val url = BackendConfig.baseUrl.trimEnd('/') + "/v1/candles?symbol=" + symbol + "&timeframe=" + timeframe + "&limit=160"
             val request = Request.Builder().url(url).header("Accept", "application/json").build()
             client.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return emptyList()
-                val array = JSONArray(response.body?.string() ?: "[]")
+                if (!response.isSuccessful) {
+                    lastError = "Server candle HTTP ${response.code}"
+                    return emptyList()
+                }
+                val array = JSONArray(response.body?.string().orEmpty().ifBlank { "[]" })
                 buildList {
                     for (i in 0 until array.length()) {
                         val item = array.getJSONObject(i)
+                        val time = item.getLong("time")
                         val o = item.getDouble("open")
                         val h = item.getDouble("high")
                         val l = item.getDouble("low")
                         val c = item.getDouble("close")
-                        if (o.isFinite() && h.isFinite() && l.isFinite() && c.isFinite() && h >= maxOf(o, c) && l <= minOf(o, c)) {
-                            add(Candle(item.getLong("time"), o, h, l, c, item.optDouble("volume", 0.0)))
+                        val volume = item.optDouble("volume", 0.0)
+                        if (time > 0 && o.isFinite() && h.isFinite() && l.isFinite() && c.isFinite() && volume.isFinite() && h >= maxOf(o, c) && l <= minOf(o, c)) {
+                            add(Candle(time, o, h, l, c, volume))
                         }
                     }
                 }.takeLast(160)
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            lastError = e.message?.take(120) ?: "Gagal mengambil candle"
             emptyList()
         }
     }
