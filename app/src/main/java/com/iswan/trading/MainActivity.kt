@@ -85,7 +85,7 @@ private fun IswanTradingApp(context: Context) {
         }
     }
 
-    DisposableEffect(Unit) { onDispose { repository.close() } }
+    DisposableEffect(Unit) { onDispose { repository.close(); candleRepository.close() } }
 }
 
 @Composable
@@ -123,7 +123,7 @@ private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: Candle
     var candles by remember(symbol, range) { mutableStateOf<List<Candle>>(emptyList()) }
     LaunchedEffect(symbol, range) {
         while (isActive) {
-            val next = repo.getCandles(listOf(symbol), range)[symbol].orEmpty()
+            val next = repo.getCandles(symbol, range, "5m")
             if (next.isNotEmpty()) candles = next
             delay(1000)
         }
@@ -221,15 +221,16 @@ private fun SettingsScreen(pythonBaseUrl: String, onSavePythonUrl: (String) -> U
 
     Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-        Text("Refresh harga: 1 detik")
-        Text("Data pasar berasal dari feed publik internet. Waktu dan ketersediaan harga dapat berbeda menurut instrumen/provider.")
-        Text("Python Analysis Engine", fontWeight = FontWeight.Bold)
+        Text("Sumber harga: Twelve Data")
+        Text("Refresh harga aplikasi: 1 detik")
+        Text("Twelve Data API key tetap berada di backend, bukan di APK.")
+        Text("Python / Market Backend", fontWeight = FontWeight.Bold)
         OutlinedTextField(
             value = draftUrl,
             onValueChange = { draftUrl = it; saved = false },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
-            label = { Text("URL server Python") },
+            label = { Text("URL server backend") },
             placeholder = { Text("https://alamat-server-kamu") }
         )
         Button(
@@ -240,18 +241,17 @@ private fun SettingsScreen(pythonBaseUrl: String, onSavePythonUrl: (String) -> U
                 saved = true
             },
             modifier = Modifier.fillMaxWidth()
-        ) { Text("Simpan URL Python") }
+        ) { Text("Simpan URL Backend") }
         Text(
             when {
-                saved && draftUrl.isNotBlank() -> "URL Python tersimpan. Analysis akan mencoba Python setiap 10 detik."
-                draftUrl.isNotBlank() -> "Python siap dikonfigurasi. Pastikan server dapat diakses dari internet oleh HP."
-                else -> "Python belum terhubung. Analysis tetap berjalan memakai mesin teknikal lokal."
+                saved && draftUrl.isNotBlank() -> "URL backend tersimpan. Harga dan candle akan memakai server ini."
+                draftUrl.isNotBlank() -> "Backend siap dikonfigurasi. Pastikan server dapat diakses dari internet oleh HP."
+                else -> "Backend belum terhubung. Analysis tetap bisa berjalan memakai mesin teknikal lokal, tetapi harga live memerlukan backend."
             },
             color = Color.Gray,
             style = MaterialTheme.typography.bodySmall
         )
-        Text("Jangan gunakan http://127.0.0.1 atau localhost di HP; alamat itu menunjuk ke HP sendiri, bukan server Python.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-        Text("Integrasi MT4 broker memerlukan API/bridge broker yang sesuai.", color = Color.Gray)
+        Text("Jangan gunakan http://127.0.0.1 atau localhost di HP; alamat itu menunjuk ke HP sendiri, bukan server.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
     }
 }
 
@@ -263,11 +263,17 @@ private fun toggleWatchlist(context: Context, current: Set<String>, symbol: Stri
     return updated
 }
 
-private fun loadPythonBaseUrl(context: Context): String =
-    context.getSharedPreferences("iswan", Context.MODE_PRIVATE).getString("python_base_url", "") ?: ""
+private fun loadPythonBaseUrl(context: Context): String {
+    val url = context.getSharedPreferences("iswan", Context.MODE_PRIVATE).getString("python_base_url", "").orEmpty()
+    val normalized = url.trim().trimEnd('/')
+    BackendConfig.baseUrl = normalized
+    return normalized
+}
 
 private fun savePythonBaseUrl(context: Context, url: String) {
-    context.getSharedPreferences("iswan", Context.MODE_PRIVATE).edit().putString("python_base_url", url).apply()
+    val normalized = url.trim().trimEnd('/')
+    context.getSharedPreferences("iswan", Context.MODE_PRIVATE).edit().putString("python_base_url", normalized).apply()
+    BackendConfig.baseUrl = normalized
 }
 
 private fun analyze(candles: List<Candle>): AnalysisResult {
