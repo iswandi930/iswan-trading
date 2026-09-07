@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Public Market Engine", version="0.4.0")
+app = FastAPI(title="Iswan Trading Public Market Engine", version="0.4.1")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -86,6 +86,15 @@ def health() -> dict[str, str]:
     }
 
 
+async def _gold_quote() -> MarketQuote | None:
+    data = await _json("https://api.metals.live/v1/spot")
+    if isinstance(data, list):
+        for row in data:
+            if isinstance(row, dict) and row.get("gold") is not None:
+                return MarketQuote(symbol="XAUUSD", price=float(row["gold"]), marketTime=_now_ms())
+    return None
+
+
 async def _forex_quotes(requested: list[str]) -> dict[str, tuple[float, int]]:
     data = await _json("https://open.er-api.com/v6/latest/USD")
     rates = data.get("rates", {}) if isinstance(data, dict) else {}
@@ -131,6 +140,11 @@ async def quotes(symbols: str) -> list[MarketQuote]:
         raise HTTPException(status_code=404, detail=f"Unsupported symbols: {', '.join(unknown)}")
     result: dict[str, MarketQuote] = {}
 
+    if "XAUUSD" in requested:
+        gold = await _gold_quote()
+        if gold is not None:
+            result["XAUUSD"] = gold
+
     forex = [s for s in requested if s in FOREX_BASES]
     if forex:
         for symbol, (price, ts) in (await _forex_quotes(forex)).items():
@@ -146,8 +160,8 @@ async def quotes(symbols: str) -> list[MarketQuote]:
         for symbol, (price, change, ts) in (await _stock_quotes(stocks)).items():
             result[symbol] = MarketQuote(symbol=symbol, price=price, changePercent=change, marketTime=ts)
 
-    # XAUUSD and oil are deliberately not fabricated. If no public provider is
-    # available for a symbol, omit it rather than displaying a fake live price.
+    # Oil has no no-key provider wired in yet. It is omitted instead of showing
+    # fabricated data. The same rule applies to every unsupported live feed.
     return [result[s] for s in requested if s in result]
 
 
