@@ -5,6 +5,8 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+# Keep the release/build workflow deterministic and always build the current main source.
+
 jobs:
   build:
     runs-on: ubuntu-latest
