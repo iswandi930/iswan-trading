@@ -321,11 +321,24 @@ private fun analyze(candles: List<Candle>): AnalysisResult {
     val ema21 = ema(closes, 21)
     val sma20 = closes.takeLast(20).average()
     val rsi = rsi(closes, 14)
-    val bullish = ema9 > ema21 && closes.last() > sma20 && (rsi == null || rsi < 70)
-    val bearish = ema9 < ema21 && closes.last() < sma20 && (rsi == null || rsi > 30)
+    val last = closes.last()
+    val bullEma = ema9 > ema21
+    val bearEma = ema9 < ema21
+    val bullSma = last > sma20
+    val bearSma = last < sma20
+    val bullRsi = rsi?.let { it in 50.0..69.999 } ?: false
+    val bearRsi = rsi?.let { it in 30.001..50.0 } ?: false
+    val bullish = bullEma && bullSma && (rsi == null || rsi < 70)
+    val bearish = bearEma && bearSma && (rsi == null || rsi > 30)
     val signal = when { bullish -> Signal.BUY; bearish -> Signal.SELL; else -> Signal.NEUTRAL }
-    val confidence = listOf(ema9 > ema21, closes.last() > sma20, rsi != null && rsi > 50).count { it } * 25
-    return AnalysisResult(signal, confidence, if (ema9 >= ema21) "BULLISH" else "BEARISH", rsi)
+    val bullScore = listOf(bullEma to 40, bullSma to 35, bullRsi to 25).sumOf { (ok, weight) -> if (ok) weight else 0 }
+    val bearScore = listOf(bearEma to 40, bearSma to 35, bearRsi to 25).sumOf { (ok, weight) -> if (ok) weight else 0 }
+    val confidence = when (signal) {
+        Signal.BUY -> bullScore
+        Signal.SELL -> bearScore
+        Signal.NEUTRAL -> maxOf(bullScore, bearScore).coerceAtMost(49)
+    }
+    return AnalysisResult(signal, confidence, if (bullScore >= bearScore) "BULLISH" else "BEARISH", rsi)
 }
 
 private fun ema(values: List<Double>, period: Int): Double {
