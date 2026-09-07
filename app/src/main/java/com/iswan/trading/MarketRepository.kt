@@ -9,7 +9,12 @@ import java.util.concurrent.TimeUnit
 
 data class MarketQuote(val price: Double, val changePercent: Double?, val marketTime: Long?)
 
-class MarketRepository(private val baseUrl: String) {
+object BackendConfig {
+    @Volatile
+    var baseUrl: String = ""
+}
+
+class MarketRepository {
     private val client = OkHttpClient.Builder()
         .callTimeout(5, TimeUnit.SECONDS)
         .connectTimeout(3, TimeUnit.SECONDS)
@@ -17,6 +22,7 @@ class MarketRepository(private val baseUrl: String) {
         .build()
 
     suspend fun getPrices(symbols: List<String>): Map<String, MarketQuote> = withContext(Dispatchers.IO) {
+        val baseUrl = BackendConfig.baseUrl
         if (baseUrl.isBlank() || symbols.isEmpty()) return@withContext emptyMap()
         try {
             val url = baseUrl.trimEnd('/') + "/v1/quotes?symbols=" + symbols.joinToString(",")
