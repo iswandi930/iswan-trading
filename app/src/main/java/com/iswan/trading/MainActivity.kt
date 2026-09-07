@@ -37,6 +37,7 @@ private fun IswanTradingApp(context: Context) {
     var selected by remember { mutableStateOf<String?>(null) }
     var prices by remember { mutableStateOf<Map<String, MarketQuote>>(emptyMap()) }
     var watchlist by remember { mutableStateOf(loadWatchlist(context)) }
+    var pythonBaseUrl by remember { mutableStateOf(loadPythonBaseUrl(context)) }
     val markets = remember { MarketCatalog.markets }
 
     LaunchedEffect(Unit) {
@@ -66,8 +67,11 @@ private fun IswanTradingApp(context: Context) {
                         "Watchlist" -> MarketsScreen(markets.filter { watchlist.contains(it.symbol) }, prices, watchlist, { selected = it }) { symbol ->
                             watchlist = toggleWatchlist(context, watchlist, symbol)
                         }
-                        "Analysis" -> AnalysisScreen(markets, candleRepository)
-                        else -> SettingsScreen()
+                        "Analysis" -> AnalysisScreen(markets, candleRepository, pythonBaseUrl)
+                        else -> SettingsScreen(pythonBaseUrl) { url ->
+                            pythonBaseUrl = url
+                            savePythonBaseUrl(context, url)
+                        }
                     }
                     NavigationBar {
                         listOf("Markets", "Watchlist", "Analysis", "Settings").forEach { item ->
@@ -159,15 +163,29 @@ private fun CandleChart(candles: List<Candle>) {
 }
 
 @Composable
-private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository) {
+private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository, pythonBaseUrl: String) {
     var data by remember { mutableStateOf<Map<String, AnalysisResult>>(emptyMap()) }
     var refreshing by remember { mutableStateOf(false) }
+    val pythonClient = remember(pythonBaseUrl) { PythonAnalysisClient(pythonBaseUrl) }
 
-    LaunchedEffect(Unit) {
+    DisposableEffect(pythonBaseUrl) {
+        onDispose { pythonClient.close() }
+    }
+
+    LaunchedEffect(pythonBaseUrl) {
         while (isActive) {
             refreshing = true
             val candles = repo.getCandles(markets.map { it.symbol }, "1d", "5m")
-            if (candles.isNotEmpty()) data = candles.mapValues { analyze(it.value) }
+            if (candles.isNotEmpty()) {
+                val results = mutableMapOf<String, AnalysisResult>()
+                for (market in markets) {
+                    val series = candles[market.symbol].orEmpty()
+                    if (series.isEmpty()) continue
+                    val pythonResult = pythonClient.analyze(market.symbol, series)
+                    results[market.symbol] = pythonResult ?: analyze(series)
+                }
+                if (results.isNotEmpty()) data = results
+            }
             refreshing = false
             delay(10000)
         }
@@ -175,7 +193,13 @@ private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository) {
 
     LazyColumn(contentPadding = PaddingValues(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         item {
-            Text(if (refreshing) "ANALYSIS • memperbarui…" else "ANALYSIS • live refresh 10 detik", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+            Text(
+                if (refreshing) "ANALYSIS • memperbarui…"
+                else if (pythonBaseUrl.isBlank()) "ANALYSIS • lokal • refresh 10 detik"
+                else "ANALYSIS • Python + fallback lokal • refresh 10 detik",
+                color = Color.Gray,
+                style = MaterialTheme.typography.bodySmall
+            )
         }
         items(markets, key = { it.symbol }) { market ->
             val result = data[market.symbol]
@@ -191,11 +215,42 @@ private fun AnalysisScreen(markets: List<Market>, repo: CandleRepository) {
 }
 
 @Composable
-private fun SettingsScreen() {
+private fun SettingsScreen(pythonBaseUrl: String, onSavePythonUrl: (String) -> Unit) {
+    var draftUrl by remember(pythonBaseUrl) { mutableStateOf(pythonBaseUrl) }
+    var saved by remember { mutableStateOf(false) }
+
     Column(Modifier.fillMaxSize().padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("Refresh harga: 1 detik")
         Text("Data pasar berasal dari feed publik internet. Waktu dan ketersediaan harga dapat berbeda menurut instrumen/provider.")
+        Text("Python Analysis Engine", fontWeight = FontWeight.Bold)
+        OutlinedTextField(
+            value = draftUrl,
+            onValueChange = { draftUrl = it; saved = false },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            label = { Text("URL server Python") },
+            placeholder = { Text("https://alamat-server-kamu") }
+        )
+        Button(
+            onClick = {
+                val normalized = draftUrl.trim().trimEnd('/')
+                draftUrl = normalized
+                onSavePythonUrl(normalized)
+                saved = true
+            },
+            modifier = Modifier.fillMaxWidth()
+        ) { Text("Simpan URL Python") }
+        Text(
+            when {
+                saved && draftUrl.isNotBlank() -> "URL Python tersimpan. Analysis akan mencoba Python setiap 10 detik."
+                draftUrl.isNotBlank() -> "Python siap dikonfigurasi. Pastikan server dapat diakses dari internet oleh HP."
+                else -> "Python belum terhubung. Analysis tetap berjalan memakai mesin teknikal lokal."
+            },
+            color = Color.Gray,
+            style = MaterialTheme.typography.bodySmall
+        )
+        Text("Jangan gunakan http://127.0.0.1 atau localhost di HP; alamat itu menunjuk ke HP sendiri, bukan server Python.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
         Text("Integrasi MT4 broker memerlukan API/bridge broker yang sesuai.", color = Color.Gray)
     }
 }
@@ -206,6 +261,13 @@ private fun toggleWatchlist(context: Context, current: Set<String>, symbol: Stri
     val updated = current.toMutableSet().apply { if (!add(symbol)) remove(symbol) }.toSet()
     context.getSharedPreferences("iswan", Context.MODE_PRIVATE).edit().putStringSet("watchlist", updated).apply()
     return updated
+}
+
+private fun loadPythonBaseUrl(context: Context): String =
+    context.getSharedPreferences("iswan", Context.MODE_PRIVATE).getString("python_base_url", "") ?: ""
+
+private fun savePythonBaseUrl(context: Context, url: String) {
+    context.getSharedPreferences("iswan", Context.MODE_PRIVATE).edit().putString("python_base_url", url).apply()
 }
 
 private fun analyze(candles: List<Candle>): AnalysisResult {
