@@ -24,6 +24,18 @@ import kotlinx.coroutines.isActive
 
 private const val DEFAULT_BACKEND_URL = "https://iswan-market-backend-production.up.railway.app"
 
+private data class TimeframeOption(val label: String, val apiValue: String)
+
+private val TIMEFRAMES = listOf(
+    TimeframeOption("1M", "1m"),
+    TimeframeOption("5M", "5m"),
+    TimeframeOption("15M", "15m"),
+    TimeframeOption("30M", "30m"),
+    TimeframeOption("1H", "1h"),
+    TimeframeOption("4H", "4h"),
+    TimeframeOption("1D", "1d")
+)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -124,33 +136,45 @@ private fun MarketsScreen(
 
 @Composable
 private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: CandleRepository, onBack: () -> Unit) {
-    var range by remember { mutableStateOf("1d") }
-    var candles by remember(symbol, range) { mutableStateOf<List<Candle>>(emptyList()) }
-    val interval = when (range) {
-        "1d" -> "5m"
-        "5d" -> "15m"
-        "1mo" -> "30m"
-        else -> "5m"
-    }
-    LaunchedEffect(symbol, range, interval) {
+    var timeframe by remember { mutableStateOf(TIMEFRAMES[1]) }
+    var candles by remember(symbol, timeframe) { mutableStateOf<List<Candle>>(emptyList()) }
+
+    LaunchedEffect(symbol, timeframe) {
         while (isActive) {
-            val next = repo.getCandles(symbol, range, interval)
+            val next = repo.getCandles(symbol, "1d", timeframe.apiValue)
             if (next.isNotEmpty()) candles = next
             delay(1000)
         }
     }
+
     Column(Modifier.fillMaxSize().padding(14.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Text("‹  $symbol", fontWeight = FontWeight.Bold, modifier = Modifier.clickable { onBack() })
             Text(quote?.price?.let { "%.5f".format(it) } ?: "—")
         }
         Text(quote?.changePercent?.let { "%+.2f%%".format(it) } ?: "—", color = Color.Gray)
-        Text("Yahoo Finance • $interval • refresh 1 detik", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
-        Row(Modifier.padding(vertical = 10.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("1d", "5d", "1mo").forEach { r -> FilterChip(selected = range == r, onClick = { range = r }, label = { Text(r) }) }
+        Text("Yahoo Finance • TF ${timeframe.label} • refresh 1 detik", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
+
+        Row(
+            Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            TIMEFRAMES.forEach { option ->
+                FilterChip(
+                    selected = timeframe.apiValue == option.apiValue,
+                    onClick = { timeframe = option },
+                    label = { Text(option.label) }
+                )
+            }
         }
+
         Box(Modifier.fillMaxWidth().weight(1f).background(Color.Black)) { CandleChart(candles) }
-        Text("Sinyal adalah skor teknikal, bukan jaminan profit. Akurasi harus divalidasi dengan backtest.", color = Color.Gray, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp))
+        Text(
+            "Sinyal adalah skor teknikal, bukan jaminan profit. Akurasi harus divalidasi dengan backtest.",
+            color = Color.Gray,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.padding(top = 8.dp)
+        )
     }
 }
 
@@ -235,6 +259,7 @@ private fun SettingsScreen(pythonBaseUrl: String, onSavePythonUrl: (String) -> U
         Text("Settings", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text("Sumber harga & candle: Yahoo Finance")
         Text("Refresh data aplikasi: 1 detik")
+        Text("Timeframe chart: 1M • 5M • 15M • 30M • 1H • 4H • 1D")
         Text("Aplikasi mengambil quote dan candle dari backend yang memakai Yahoo Finance.")
         Text("Catatan: refresh 1 detik tidak mengubah feed Yahoo yang mungkin tertunda untuk instrumen tertentu.", color = Color.Gray, style = MaterialTheme.typography.bodySmall)
         Text("Python / Market Backend", fontWeight = FontWeight.Bold)
@@ -290,7 +315,7 @@ private fun savePythonBaseUrl(context: Context, url: String) {
 }
 
 private fun analyze(candles: List<Candle>): AnalysisResult {
-    if (candles.isEmpty()) return AnalysisResult(Signal.NEUTRAL, 0, "N/A", null)
+    if (candles.size < 21) return AnalysisResult(Signal.NEUTRAL, 0, "N/A", null)
     val closes = candles.map { it.close }
     val ema9 = ema(closes, 9)
     val ema21 = ema(closes, 21)
