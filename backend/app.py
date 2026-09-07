@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.5")
+app = FastAPI(title="Iswan Trading Yahoo Market Engine", version="0.8.6")
 
 SYMBOLS = {
     "XAUUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
@@ -263,7 +263,7 @@ async def candles(symbol: str, timeframe: str = "5min", limit: int = 160) -> lis
     limit = max(21, min(limit, 1000))
     key = timeframe.lower().strip()
     intervals = {
-        "1min": ("1d", "1m"), "5min": ("5d", "5m"), "15min": ("5d", "15m"),
+        "1min": ("5d", "1m"), "5min": ("5d", "5m"), "15min": ("5d", "15m"),
         "30min": ("1mo", "30m"), "1h": ("3mo", "1h"), "4h": ("6mo", "1h"),
         "1day": ("2y", "1d"),
     }
