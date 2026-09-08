@@ -3,7 +3,7 @@ indicator("X-Core M15 — BUY / SELL / WAIT V2", overlay=true, max_lines_count=2
 
 // X-Core V2
 // Main chart: M15. Direction chain: H4 -> H1 -> M30 -> M15.
-// Visual rule: plain green BUY arrow below price, plain red SELL arrow above price.
+// Visual rule: green BUY arrow below price, red SELL arrow above price.
 // No BUY/SELL text labels. Signals use closed candles and confirmed HTF bars.
 
 emaFastLen = input.int(20, "EMA Fast", minval=2)
@@ -99,20 +99,19 @@ sellRisk = math.max(sellSL - close, syminfo.mintick)
 buyTarget = math.max(close + buyRisk * rr, nz(lastSwingHigh, close + atr * rr))
 sellTarget = math.min(close - sellRisk * rr, nz(lastSwingLow, close - atr * rr))
 
-// Plain arrow lines: green BUY upward, red SELL downward, with target-directed projection.
+// Required visual: green BUY arrow upward and red SELL arrow downward.
 var line activeBuy = na
 var line activeSell = na
 if buySignal
     if not na(activeBuy)
         line.delete(activeBuy)
-    activeBuy := line.new(bar_index, low - atr * 0.30, bar_index + arrowBars, buyTarget, xloc=xloc.bar_index, extend=extend.none, color=color.lime, width=4, style=line.style_arrow_right)
+    activeBuy := line.new(bar_index, low - atr * 0.30, bar_index + arrowBars, buyTarget, xloc=xloc.bar_index, extend=extend.none, color=color.green, width=4, style=line.style_arrow_right)
 if sellSignal
     if not na(activeSell)
         line.delete(activeSell)
     activeSell := line.new(bar_index, high + atr * 0.30, bar_index + arrowBars, sellTarget, xloc=xloc.bar_index, extend=extend.none, color=color.red, width=4, style=line.style_arrow_right)
 
-// Compact status only in the Data Window; chart remains arrow-focused.
-plotchar(buySignal, "BUY", "↑", location=location.belowbar, color=color.lime, display=display.data_window)
+plotchar(buySignal, "BUY", "↑", location=location.belowbar, color=color.green, display=display.data_window)
 plotchar(sellSignal, "SELL", "↓", location=location.abovebar, color=color.red, display=display.data_window)
 
 alertcondition(buySignal, "X-Core BUY", "X-Core BUY on {{ticker}} {{interval}}")
