@@ -1,11 +1,12 @@
 //@version=5
-indicator("X-Core M15 — BUY / SELL / WAIT V3", overlay=true, max_lines_count=200, max_labels_count=100)
+indicator("X-Core Universal — M15 / 5M / 1M V4", overlay=true, max_lines_count=200, max_labels_count=100)
 
-// X-Core V3
-// Main chart: M15. Direction chain: H4 -> H1 -> M30 -> M15.
+// X-Core Universal
+// Designed for XAUUSD, FX, indices, stocks, crypto, commodities and other liquid markets.
+// Core direction: H4 -> H1 -> M30 -> M15. Lower TF timing: 5M -> 1M.
+// Macro filters are market-aware: DXY/US10Y are applied only when the chart is gold.
 // Visual rule: green BUY arrow below price, red SELL arrow above price.
-// No BUY/SELL text labels. Signals use closed candles and confirmed HTF bars.
-// Macro confirmation: DXY + US 10Y yield. News-risk protection: abnormal ATR expansion.
+// No BUY/SELL text labels. Signals use closed candles and confirmed HTF data.
 
 emaFastLen = input.int(20, "EMA Fast", minval=2)
 emaTrendLen = input.int(50, "EMA Trend", minval=5)
@@ -32,7 +33,6 @@ f_htfBull(tf) =>
 f_htfBear(tf) =>
     request.security(syminfo.tickerid, tf, close[1] < ta.ema(close, emaFastLen)[1] and ta.ema(close, emaFastLen)[1] < ta.ema(close, emaTrendLen)[1] and ta.ema(close, emaTrendLen)[1] < ta.ema(close, emaSlowLen)[1] and ta.falling(ta.ema(close, emaTrendLen), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
 
-// Confirmed swing structure on each higher timeframe.
 f_htfStructureBull(tf) =>
     request.security(syminfo.tickerid, tf, ta.pivothigh(high, pivotLen, pivotLen) > ta.pivothigh(high, pivotLen, pivotLen)[pivotLen * 2] and ta.pivotlow(low, pivotLen, pivotLen) > ta.pivotlow(low, pivotLen, pivotLen)[pivotLen * 2], barmerge.gaps_off, barmerge.lookahead_off)
 
@@ -87,7 +87,6 @@ pullbackBear = ta.highest(high, 5) >= ema20 or ta.highest(high, 5) >= ema50
 volAvg = ta.sma(volume, volumeLen)
 volumeOK = na(volume) or na(volAvg) or volume >= volAvg * volumeMult
 
-// Momentum quality: stronger momentum gives more confidence and a longer projected arrow.
 rsiBullScore = math.max(0.0, math.min(1.0, (rsi - 50.0) / 20.0))
 rsiBearScore = math.max(0.0, math.min(1.0, (50.0 - rsi) / 20.0))
 adxScore = math.max(0.0, math.min(1.0, (adx - adxMin) / 20.0))
@@ -97,13 +96,11 @@ bodyBearScore = math.max(0.0, math.min(1.0, (open - close) / range))
 m15Bull = close > ema20 and ema20 > ema50 and ema50 > ema200 and ta.rising(ema50, 2) and rsi > 52 and adx >= adxMin and diPlus > diMinus and pullbackBull and bullBody and (breakBull or bullStructure) and volumeOK
 m15Bear = close < ema20 and ema20 < ema50 and ema50 < ema200 and ta.falling(ema50, 2) and rsi < 48 and adx >= adxMin and diMinus > diPlus and pullbackBear and bearBody and (breakBear or bearStructure) and volumeOK
 
-// DXY is a macro confirmation for gold. Rising DXY blocks BUY; falling DXY blocks SELL.
+// Gold-only macro layer. Other markets use their own price/volume/volatility structure without being blocked by DXY/yield.
 dxyClose = request.security(dxySymbol, "15", close[1], barmerge.gaps_off, barmerge.lookahead_off)
 dxyEma20 = request.security(dxySymbol, "15", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
 dxyBull = dxyClose > dxyEma20
 dxyBear = dxyClose < dxyEma20
-
-// US 10Y yield confirmation for gold. Rising yield is a headwind; falling yield supports gold.
 yieldClose = request.security(yieldSymbol, "15", close[1], barmerge.gaps_off, barmerge.lookahead_off)
 yieldEma20 = request.security(yieldSymbol, "15", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
 yieldRising = yieldClose > yieldEma20
@@ -113,21 +110,19 @@ isGold = str.contains(str.upper(syminfo.ticker), "XAU") or str.contains(str.uppe
 macroBuyOK = not isGold or ((not useDxyFilter or dxyBear) and (not useYieldFilter or yieldFalling))
 macroSellOK = not isGold or ((not useDxyFilter or dxyBull) and (not useYieldFilter or yieldRising))
 
-// Volatility/news-risk proxy: avoid entries during abnormal M15 ATR expansion.
+// Abnormal volatility protection works for every market and acts as a simple news/event-risk proxy.
 atrBase = ta.sma(atr, 50)
 volatilityOK = na(atrBase) or atr <= atrBase * 2.2
 
-// Higher-timeframe structure is a second confirmation layer. If structure is unavailable early in history,
-// the EMA trend layer remains the primary direction filter.
 htfBullStructureOK = (na(h4StructBull) or h4StructBull) and (na(h1StructBull) or h1StructBull) and (na(m30StructBull) or m30StructBull)
 htfBearStructureOK = (na(h4StructBear) or h4StructBear) and (na(h1StructBear) or h1StructBear) and (na(m30StructBear) or m30StructBear)
 
+// Core M15 signal. This is intentionally market-neutral; only the gold macro layer is asset-specific.
 rawBuy = barstate.isconfirmed and h4Bull and h1Bull and m30Bull and htfBullStructureOK and m15Bull and macroBuyOK and volatilityOK
 rawSell = barstate.isconfirmed and h4Bear and h1Bear and m30Bear and htfBearStructureOK and m15Bear and macroSellOK and volatilityOK
 buySignal = rawBuy and not rawSell
 sellSignal = rawSell and not rawBuy
 
-// Structure-aware targets. Entry is close; stop sits beyond the latest confirmed swing.
 buySL = na(lastSwingLow) ? close - atr : lastSwingLow - atr * slAtr
 sellSL = na(lastSwingHigh) ? close + atr : lastSwingHigh + atr * slAtr
 buyRisk = math.max(close - buySL, syminfo.mintick)
@@ -135,11 +130,34 @@ sellRisk = math.max(sellSL - close, syminfo.mintick)
 buyTarget = math.max(close + buyRisk * rr, nz(lastSwingHigh, close + atr * rr))
 sellTarget = math.min(close - sellRisk * rr, nz(lastSwingLow, close - atr * rr))
 
-// Dynamic arrow projection: stronger momentum/ADX gets a longer projection, weak setups get a shorter one.
 buyStrength = math.max(0.0, math.min(1.0, rsiBullScore * 0.35 + adxScore * 0.35 + bodyBullScore * 0.30))
 sellStrength = math.max(0.0, math.min(1.0, rsiBearScore * 0.35 + adxScore * 0.35 + bodyBearScore * 0.30))
 buyArrowBars = math.round(arrowBarsMin + (arrowBarsMax - arrowBarsMin) * buyStrength)
 sellArrowBars = math.round(arrowBarsMin + (arrowBarsMax - arrowBarsMin) * sellStrength)
+
+// Lower-timeframe persistence: 5M and 1M can refine timing, but a small counter-candle does not flip direction.
+f_tfTrendBull(tf) =>
+    request.security(syminfo.tickerid, tf, close[1] > ta.ema(close, 20)[1] and ta.ema(close, 20)[1] > ta.ema(close, 50)[1] and ta.rising(ta.ema(close, 20), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+f_tfTrendBear(tf) =>
+    request.security(syminfo.tickerid, tf, close[1] < ta.ema(close, 20)[1] and ta.ema(close, 20)[1] < ta.ema(close, 50)[1] and ta.falling(ta.ema(close, 20), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+m5Bull = f_tfTrendBull("5")
+m5Bear = f_tfTrendBear("5")
+m1Bull = f_tfTrendBull("1")
+m1Bear = f_tfTrendBear("1")
+
+// On M5/M1 charts, use the same persistent higher-timeframe direction and require lower-TF agreement only for a new signal.
+// Existing signals are not invalidated by a single counter candle; structure must reverse first.
+var int directionState = 0
+if buySignal
+    directionState := 1
+else if sellSignal
+    directionState := -1
+
+// On any chart timeframe, 5M/1M are confirmation layers when available. On higher charts they remain informational.
+lowerBull = m5Bull and m1Bull
+lowerBear = m5Bear and m1Bear
 
 // Required visual: green BUY arrow below price and red SELL arrow above price.
 var line activeBuy = na
