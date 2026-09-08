@@ -1,10 +1,10 @@
 //@version=5
-indicator("X-Core Universal — M15 / 5M / 1M V5", overlay=true, max_lines_count=200, max_labels_count=100)
+indicator("X-Core Universal — M15 / 5M / 1M V6", overlay=true, max_lines_count=200, max_labels_count=100)
 
 // X-Core Universal: all liquid markets.
 // Core direction: H4 -> H1 -> M30 -> M15. Timing: 5M -> 1M.
 // BUY = green arrow below price. SELL = red arrow above price.
-// Signals use confirmed data. Small counter-candles do not flip the active direction.
+// Confirmed data only. A small counter-candle does not flip the active direction.
 
 emaFastLen = input.int(20, "EMA Fast", minval=2)
 emaTrendLen = input.int(50, "EMA Trend", minval=5)
@@ -51,27 +51,39 @@ h4StructBear = f_htfStructureBear("240")
 h1StructBear = f_htfStructureBear("60")
 m30StructBear = f_htfStructureBear("30")
 
-// M15 is explicitly used as the decision timeframe, regardless of chart timeframe.
-f_m15Bull() =>
-    request.security(syminfo.tickerid, "15", close[1] > ta.ema(close, emaFastLen)[1] and ta.ema(close, emaFastLen)[1] > ta.ema(close, emaTrendLen)[1] and ta.ema(close, emaTrendLen)[1] > ta.ema(close, emaSlowLen)[1] and ta.rising(ta.ema(close, emaTrendLen), 2)[1] and ta.rsi(close, rsiLen)[1] > 52 and ta.dmi(adxLen, adxLen)[0][1] > ta.dmi(adxLen, adxLen)[1][1] and ta.dmi(adxLen, adxLen)[2][1] >= adxMin, barmerge.gaps_off, barmerge.lookahead_off)
+// M15 decision layer is explicitly calculated in the 15-minute context.
+f_m15BullCore() =>
+    e20 = ta.ema(close, emaFastLen)
+    e50 = ta.ema(close, emaTrendLen)
+    e200 = ta.ema(close, emaSlowLen)
+    r = ta.rsi(close, rsiLen)
+    [p, m, a] = ta.dmi(adxLen, adxLen)
+    p[1] > m[1] and a[1] >= adxMin and close[1] > e20[1] and e20[1] > e50[1] and e50[1] > e200[1] and ta.rising(e50, 2)[1] and r[1] > 52
 
-f_m15Bear() =>
-    request.security(syminfo.tickerid, "15", close[1] < ta.ema(close, emaFastLen)[1] and ta.ema(close, emaFastLen)[1] < ta.ema(close, emaTrendLen)[1] and ta.ema(close, emaTrendLen)[1] < ta.ema(close, emaSlowLen)[1] and ta.falling(ta.ema(close, emaTrendLen), 2)[1] and ta.rsi(close, rsiLen)[1] < 48 and ta.dmi(adxLen, adxLen)[1][1] > ta.dmi(adxLen, adxLen)[0][1] and ta.dmi(adxLen, adxLen)[2][1] >= adxMin, barmerge.gaps_off, barmerge.lookahead_off)
+f_m15BearCore() =>
+    e20 = ta.ema(close, emaFastLen)
+    e50 = ta.ema(close, emaTrendLen)
+    e200 = ta.ema(close, emaSlowLen)
+    r = ta.rsi(close, rsiLen)
+    [p, m, a] = ta.dmi(adxLen, adxLen)
+    m[1] > p[1] and a[1] >= adxMin and close[1] < e20[1] and e20[1] < e50[1] and e50[1] < e200[1] and ta.falling(e50, 2)[1] and r[1] < 48
 
-m15BullBase = f_m15Bull()
-m15BearBase = f_m15Bear()
+f_m15StructureBullCore() =>
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+    not na(ph) and not na(pl) and not na(ph[pivotLen * 2]) and not na(pl[pivotLen * 2]) and ph > ph[pivotLen * 2] and pl > pl[pivotLen * 2]
 
-// Confirmed M15 structure, calculated directly in the M15 context.
-f_m15StructureBull() =>
-    request.security(syminfo.tickerid, "15", ta.pivothigh(high, pivotLen, pivotLen) > ta.pivothigh(high, pivotLen, pivotLen)[pivotLen * 2] and ta.pivotlow(low, pivotLen, pivotLen) > ta.pivotlow(low, pivotLen, pivotLen)[pivotLen * 2], barmerge.gaps_off, barmerge.lookahead_off)
+f_m15StructureBearCore() =>
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+    not na(ph) and not na(pl) and not na(ph[pivotLen * 2]) and not na(pl[pivotLen * 2]) and ph < ph[pivotLen * 2] and pl < pl[pivotLen * 2]
 
-f_m15StructureBear() =>
-    request.security(syminfo.tickerid, "15", ta.pivothigh(high, pivotLen, pivotLen) < ta.pivothigh(high, pivotLen, pivotLen)[pivotLen * 2] and ta.pivotlow(low, pivotLen, pivotLen) < ta.pivotlow(low, pivotLen, pivotLen)[pivotLen * 2], barmerge.gaps_off, barmerge.lookahead_off)
+m15BullBase = request.security(syminfo.tickerid, "15", f_m15BullCore(), barmerge.gaps_off, barmerge.lookahead_off)
+m15BearBase = request.security(syminfo.tickerid, "15", f_m15BearCore(), barmerge.gaps_off, barmerge.lookahead_off)
+m15StructBull = request.security(syminfo.tickerid, "15", f_m15StructureBullCore(), barmerge.gaps_off, barmerge.lookahead_off)
+m15StructBear = request.security(syminfo.tickerid, "15", f_m15StructureBearCore(), barmerge.gaps_off, barmerge.lookahead_off)
 
-m15StructBull = f_m15StructureBull()
-m15StructBear = f_m15StructureBear()
-
-// Current chart metrics are used for risk/arrow placement only.
+// Current chart metrics are used for execution, risk and arrow placement.
 ema20 = ta.ema(close, emaFastLen)
 ema50 = ta.ema(close, emaTrendLen)
 ema200 = ta.ema(close, emaSlowLen)
@@ -91,19 +103,14 @@ if not na(pl)
 range = math.max(high - low, syminfo.mintick)
 bullBody = close > open and close >= high - range * 0.35
 bearBody = close < open and close <= low + range * 0.35
-volAvg = ta.sma(volume, volumeLen)
-volumeOK = na(volume) or na(volAvg) or volume >= volAvg * volumeMult
-
-// M15 trigger: use the last confirmed M15 candle for confirmation, with current-chart pullback/volatility used only as execution filters.
-m15BullTrigger = m15BullBase and m15StructBull
-m15BearTrigger = m15BearBase and m15StructBear
-
 pullbackBull = ta.lowest(low, 5) <= ema20 or ta.lowest(low, 5) <= ema50
 pullbackBear = ta.highest(high, 5) >= ema20 or ta.highest(high, 5) >= ema50
+volAvg = ta.sma(volume, volumeLen)
+volumeOK = na(volume) or na(volAvg) or volume >= volAvg * volumeMult
 executionBull = pullbackBull and bullBody and volumeOK
-aexecutionBear = pullbackBear and bearBody and volumeOK
+executionBear = pullbackBear and bearBody and volumeOK
 
-// Gold-only macro layer. Missing macro data does not block the signal.
+// Gold-only macro layer. If DXY or US10Y is unavailable, the missing input does not block a signal.
 dxyClose = request.security(dxySymbol, "15", close[1], barmerge.gaps_off, barmerge.lookahead_off)
 dxyEma20 = request.security(dxySymbol, "15", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
 dxyBull = not na(dxyClose) and dxyClose > dxyEma20
@@ -112,26 +119,18 @@ yieldClose = request.security(yieldSymbol, "15", close[1], barmerge.gaps_off, ba
 yieldEma20 = request.security(yieldSymbol, "15", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
 yieldRising = not na(yieldClose) and yieldClose > yieldEma20
 yieldFalling = not na(yieldClose) and yieldClose < yieldEma20
+isGold = str.contains(str.upper(syminfo.ticker), "XAU") or str.contains(str.upper(syminfo.description), "GOLD")
+macroBuyOK = not isGold or ((not useDxyFilter or na(dxyClose) or dxyBear) and (not useYieldFilter or na(yieldClose) or yieldFalling))
+macroSellOK = not isGold or ((not useDxyFilter or na(dxyClose) or dxyBull) and (not useYieldFilter or na(yieldClose) or yieldRising))
 
-a = str.upper(syminfo.ticker)
-b = str.upper(syminfo.description)
-isGold = str.contains(a, "XAU") or str.contains(b, "GOLD")
-dxyOK = na(dxyClose) or dxyBear or not useDxyFilter
-yieldBuyOK = na(yieldClose) or yieldFalling or not useYieldFilter
-dxySellOK = na(dxyClose) or dxyBull or not useDxyFilter
-yieldSellOK = na(yieldClose) or yieldRising or not useYieldFilter
-macroBuyOK = not isGold or (dxyOK and yieldBuyOK)
-macroSellOK = not isGold or (dxySellOK and yieldSellOK)
-
+// Abnormal volatility protection is universal and acts as a simple event-risk proxy.
 atrBase = ta.sma(atr, 50)
 volatilityOK = na(atrBase) or atr <= atrBase * 2.2
 
-htfBullStructureOK = na(h4StructBull) or h4StructBull
-htfBullStructureOK := htfBullStructureOK and (na(h1StructBull) or h1StructBull) and (na(m30StructBull) or m30StructBull)
-htfBearStructureOK = na(h4StructBear) or h4StructBear
-htfBearStructureOK := htfBearStructureOK and (na(h1StructBear) or h1StructBear) and (na(m30StructBear) or m30StructBear)
+htfBullStructureOK = (na(h4StructBull) or h4StructBull) and (na(h1StructBull) or h1StructBull) and (na(m30StructBull) or m30StructBull)
+htfBearStructureOK = (na(h4StructBear) or h4StructBear) and (na(h1StructBear) or h1StructBear) and (na(m30StructBear) or m30StructBear)
 
-// 5M -> 1M timing. These are only enforced on M5/M1 charts, so higher charts keep the M15 core signal.
+// Lower-timeframe timing. On M5/M1 charts both layers must agree for a new signal.
 f_tfTrendBull(tf) =>
     request.security(syminfo.tickerid, tf, close[1] > ta.ema(close, 20)[1] and ta.ema(close, 20)[1] > ta.ema(close, 50)[1] and ta.rising(ta.ema(close, 20), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
 
@@ -144,13 +143,13 @@ m1Bull = f_tfTrendBull("1")
 m1Bear = f_tfTrendBear("1")
 lowerBull = m5Bull and m1Bull
 lowerBear = m5Bear and m1Bear
-chartSeconds = timeframe.in_seconds()
+chartSeconds = timeframe.in_seconds(timeframe.period)
 useLowerGate = useLowerTiming and not na(chartSeconds) and chartSeconds <= 300
 
-rawBuy = barstate.isconfirmed and h4Bull and h1Bull and m30Bull and htfBullStructureOK and m15BullTrigger and executionBull and macroBuyOK and volatilityOK and (not useLowerGate or lowerBull)
-rawSell = barstate.isconfirmed and h4Bear and h1Bear and m30Bear and htfBearStructureOK and m15BearTrigger and executionBull == false and executionBear and macroSellOK and volatilityOK and (not useLowerGate or lowerBear)
+rawBuy = barstate.isconfirmed and h4Bull and h1Bull and m30Bull and htfBullStructureOK and m15BullBase and m15StructBull and executionBull and macroBuyOK and volatilityOK and (not useLowerGate or lowerBull)
+rawSell = barstate.isconfirmed and h4Bear and h1Bear and m30Bear and htfBearStructureOK and m15BearBase and m15StructBear and executionBear and macroSellOK and volatilityOK and (not useLowerGate or lowerBear)
 
-// Persistent direction: a counter candle alone never changes the active direction.
+// Persistent direction: only a fully confirmed opposite setup can change direction.
 var int directionState = 0
 buySignal = rawBuy and directionState != 1 and not rawSell
 sellSignal = rawSell and directionState != -1 and not rawBuy
