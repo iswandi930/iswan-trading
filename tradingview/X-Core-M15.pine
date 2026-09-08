@@ -1,0 +1,110 @@
+//@version=5
+indicator("X-Core M15 — BUY / SELL / WAIT", overlay=true, max_lines_count=100, max_labels_count=100)
+
+// X-Core V1: multi-timeframe, no score system.
+// Main chart: M15. Higher timeframes: H4 -> H1 -> M30.
+// A signal is emitted only when all required conditions agree.
+
+emaFastLen = input.int(20, "EMA Fast", minval=2)
+emaTrendLen = input.int(50, "EMA Trend", minval=5)
+emaSlowLen = input.int(200, "EMA Slow", minval=20)
+rsiLen = input.int(14, "RSI Length", minval=2)
+adxLen = input.int(14, "ADX Length", minval=2)
+adxMin = input.float(18.0, "Minimum ADX", minval=1.0, step=0.5)
+atrLen = input.int(14, "ATR Length", minval=2)
+targetAtr = input.float(1.5, "Minimum Target ATR", minval=0.25, step=0.25)
+useDxyFilter = input.bool(true, "Use DXY Filter")
+dxySymbol = input.symbol("TVC:DXY", "DXY Symbol")
+showWait = input.bool(true, "Show WAIT label")
+
+f_bull(tf) =>
+    c = request.security(syminfo.tickerid, tf, close, barmerge.gaps_off, barmerge.lookahead_off)
+    e20 = request.security(syminfo.tickerid, tf, ta.ema(close, emaFastLen), barmerge.gaps_off, barmerge.lookahead_off)
+    e50 = request.security(syminfo.tickerid, tf, ta.ema(close, emaTrendLen), barmerge.gaps_off, barmerge.lookahead_off)
+    e200 = request.security(syminfo.tickerid, tf, ta.ema(close, emaSlowLen), barmerge.gaps_off, barmerge.lookahead_off)
+    e50r = request.security(syminfo.tickerid, tf, ta.rising(ta.ema(close, emaTrendLen), 2), barmerge.gaps_off, barmerge.lookahead_off)
+    c > e20 and e20 > e50 and e50 > e200 and e50r
+
+f_bear(tf) =>
+    c = request.security(syminfo.tickerid, tf, close, barmerge.gaps_off, barmerge.lookahead_off)
+    e20 = request.security(syminfo.tickerid, tf, ta.ema(close, emaFastLen), barmerge.gaps_off, barmerge.lookahead_off)
+    e50 = request.security(syminfo.tickerid, tf, ta.ema(close, emaTrendLen), barmerge.gaps_off, barmerge.lookahead_off)
+    e200 = request.security(syminfo.tickerid, tf, ta.ema(close, emaSlowLen), barmerge.gaps_off, barmerge.lookahead_off)
+    e50f = request.security(syminfo.tickerid, tf, ta.falling(ta.ema(close, emaTrendLen), 2), barmerge.gaps_off, barmerge.lookahead_off)
+    c < e20 and e20 < e50 and e50 < e200 and e50f
+
+h4Bull = f_bull("240")
+h1Bull = f_bull("60")
+m30Bull = f_bull("30")
+h4Bear = f_bear("240")
+h1Bear = f_bear("60")
+m30Bear = f_bear("30")
+
+ema20 = ta.ema(close, emaFastLen)
+ema50 = ta.ema(close, emaTrendLen)
+ema200 = ta.ema(close, emaSlowLen)
+rsi = ta.rsi(close, rsiLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+atr = ta.atr(atrLen)
+
+// Price structure and candle confirmation on M15.
+range = math.max(high - low, syminfo.mintick)
+bullBody = close > open and close >= high - range * 0.35
+bearBody = close < open and close <= low + range * 0.35
+breakBull = close > ta.highest(high, 5)[1]
+breakBear = close < ta.lowest(low, 5)[1]
+
+// Pullback/recovery: price must have interacted with the fast trend area recently.
+pullbackBull = ta.lowest(low, 4) <= ema20 or ta.lowest(low, 4) <= ema50
+pullbackBear = ta.highest(high, 4) >= ema20 or ta.highest(high, 4) >= ema50
+
+m15Bull = close > ema20 and ema20 > ema50 and ema50 > ema200 and ta.rising(ema50, 2) and rsi > 52 and adx >= adxMin and diPlus > diMinus and pullbackBull and bullBody and breakBull
+m15Bear = close < ema20 and ema20 < ema50 and ema50 < ema200 and ta.falling(ema50, 2) and rsi < 48 and adx >= adxMin and diMinus > diPlus and pullbackBear and bearBody and breakBear
+
+// DXY is used only as a macro filter. For XAUUSD, rising DXY blocks BUY and falling DXY blocks SELL.
+dxyClose = request.security(dxySymbol, "15", close, barmerge.gaps_off, barmerge.lookahead_off)
+dxyEma20 = request.security(dxySymbol, "15", ta.ema(close, 20), barmerge.gaps_off, barmerge.lookahead_off)
+dxyBull = dxyClose > dxyEma20
+dxyBear = dxyClose < dxyEma20
+isGold = str.contains(str.upper(syminfo.ticker), "XAU") or str.contains(str.upper(syminfo.description), "GOLD")
+macroBuyOK = not useDxyFilter or not isGold or dxyBear
+macroSellOK = not useDxyFilter or not isGold or dxyBull
+
+buySignal = barstate.isconfirmed and h4Bull and h1Bull and m30Bull and m15Bull and macroBuyOK
+sellSignal = barstate.isconfirmed and h4Bear and h1Bear and m30Bear and m15Bear and macroSellOK
+
+// Target uses the nearest recent structural extreme, with an ATR minimum so the arrow has a meaningful distance.
+recentHigh = ta.highest(high, 20)
+recentLow = ta.lowest(low, 20)
+buyTarget = math.max(recentHigh, close + atr * targetAtr)
+sellTarget = math.min(recentLow, close - atr * targetAtr)
+
+var line activeBuy = na
+var line activeSell = na
+var label stateLabel = na
+
+if buySignal
+    if not na(activeBuy)
+        line.delete(activeBuy)
+    activeBuy := line.new(bar_index, low - atr * 0.35, bar_index + 8, buyTarget, xloc=xloc.bar_index, extend=extend.none, color=color.lime, width=4, style=line.style_arrow_right)
+    label.new(bar_index, low - atr * 0.45, "BUY", style=label.style_label_up, color=color.lime, textcolor=color.black, size=size.small)
+
+if sellSignal
+    if not na(activeSell)
+        line.delete(activeSell)
+    activeSell := line.new(bar_index, high + atr * 0.35, bar_index + 8, sellTarget, xloc=xloc.bar_index, extend=extend.none, color=color.red, width=4, style=line.style_arrow_right)
+    label.new(bar_index, high + atr * 0.45, "SELL", style=label.style_label_down, color=color.red, textcolor=color.white, size=size.small)
+
+waitSignal = not buySignal and not sellSignal
+if showWait and barstate.islast
+    if not na(stateLabel)
+        label.delete(stateLabel)
+    stateLabel := label.new(bar_index, high + atr * 0.8, waitSignal ? "WAIT" : buySignal ? "BUY" : "SELL", style=label.style_label_left, color=waitSignal ? color.gray : buySignal ? color.lime : color.red, textcolor=waitSignal and color.white or buySignal ? color.black : color.white, size=size.small)
+
+alertcondition(buySignal, "X-Core BUY", "X-Core BUY on {{ticker}} {{interval}}")
+alertcondition(sellSignal, "X-Core SELL", "X-Core SELL on {{ticker}} {{interval}}")
+alertcondition(waitSignal and barstate.isconfirmed, "X-Core WAIT", "X-Core WAIT on {{ticker}} {{interval}}")
+
+plot(ema20, "EMA 20", color=color.new(color.aqua, 0), linewidth=1)
+plot(ema50, "EMA 50", color=color.new(color.orange, 0), linewidth=1)
+plot(ema200, "EMA 200", color=color.new(color.blue, 0), linewidth=2)
