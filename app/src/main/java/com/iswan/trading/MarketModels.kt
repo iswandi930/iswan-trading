@@ -3,9 +3,12 @@ package com.iswan.trading
 data class Market(val symbol: String, val name: String, val category: String)
 
 object MarketCatalog {
-    // Familiar MT4-style symbols mapped by the backend to Yahoo Finance symbols.
+    // Major instruments available through the Iswan Trading Yahoo market backend.
     val markets: List<Market> = listOf(
         Market("XAUUSD", "Gold / US Dollar", "Metals"),
+        Market("XAGUSD", "Silver / US Dollar", "Metals"),
+        Market("XPTUSD", "Platinum / US Dollar", "Metals"),
+        Market("XPDUSD", "Palladium / US Dollar", "Metals"),
         Market("EURUSD", "Euro / US Dollar", "Forex"),
         Market("GBPUSD", "British Pound / US Dollar", "Forex"),
         Market("USDJPY", "US Dollar / Japanese Yen", "Forex"),
@@ -26,17 +29,37 @@ object MarketCatalog {
         Market("CHFJPY", "Swiss Franc / Japanese Yen", "Forex"),
         Market("NZDJPY", "New Zealand Dollar / Japanese Yen", "Forex"),
         Market("NZDCHF", "New Zealand Dollar / Swiss Franc", "Forex"),
+        Market("EURNZD", "Euro / New Zealand Dollar", "Forex"),
+        Market("GBPAUD", "British Pound / Australian Dollar", "Forex"),
+        Market("GBPCAD", "British Pound / Canadian Dollar", "Forex"),
+        Market("GBPNZD", "British Pound / New Zealand Dollar", "Forex"),
+        Market("AUDNZD", "Australian Dollar / New Zealand Dollar", "Forex"),
         Market("USOIL", "WTI Crude Oil", "Commodities"),
         Market("UKOIL", "Brent Crude Oil", "Commodities"),
+        Market("NATGAS", "Natural Gas", "Commodities"),
+        Market("COPPER", "Copper", "Commodities"),
         Market("BTCUSD", "Bitcoin / US Dollar", "Crypto"),
         Market("ETHUSD", "Ethereum / US Dollar", "Crypto"),
+        Market("SOLUSD", "Solana / US Dollar", "Crypto"),
+        Market("XRPUSD", "XRP / US Dollar", "Crypto"),
         Market("AAPL", "Apple", "US Stocks"),
         Market("MSFT", "Microsoft", "US Stocks"),
         Market("NVDA", "NVIDIA", "US Stocks"),
         Market("AMZN", "Amazon", "US Stocks"),
         Market("META", "Meta Platforms", "US Stocks"),
         Market("TSLA", "Tesla", "US Stocks"),
+        Market("GOOGL", "Alphabet Class A", "US Stocks"),
+        Market("NFLX", "Netflix", "US Stocks"),
+        Market("AMD", "AMD", "US Stocks"),
+        Market("AVGO", "Broadcom", "US Stocks"),
+        Market("JPM", "JPMorgan Chase", "US Stocks"),
+        Market("V", "Visa", "US Stocks"),
+        Market("MA", "Mastercard", "US Stocks"),
         Market("SPY", "S&P 500 ETF", "US ETF"),
-        Market("QQQ", "Nasdaq 100 ETF", "US ETF")
+        Market("QQQ", "Nasdaq 100 ETF", "US ETF"),
+        Market("DIA", "Dow Jones ETF", "US ETF"),
+        Market("IWM", "Russell 2000 ETF", "US ETF"),
+        Market("GLD", "Gold ETF", "US ETF"),
+        Market("SLV", "Silver ETF", "US ETF")
     )
 }
