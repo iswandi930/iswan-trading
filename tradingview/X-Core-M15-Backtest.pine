@@ -1,0 +1,98 @@
+//@version=5
+strategy("X-Core M15 — Backtest V2", overlay=true, pyramiding=0, process_orders_on_close=true, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.02)
+
+// Backtest engine for X-Core V2. Use on XAUUSD M15.
+// Entries use the same closed-candle MTF/structure logic as the V2 indicator.
+// This file exists to measure performance; it does not guarantee future results.
+
+emaFastLen = input.int(20, "EMA Fast", minval=2)
+emaTrendLen = input.int(50, "EMA Trend", minval=5)
+emaSlowLen = input.int(200, "EMA Slow", minval=20)
+rsiLen = input.int(14, "RSI Length", minval=2)
+adxLen = input.int(14, "ADX Length", minval=2)
+adxMin = input.float(18.0, "Minimum ADX", minval=1.0, step=0.5)
+atrLen = input.int(14, "ATR Length", minval=2)
+pivotLen = input.int(3, "Swing Confirmation", minval=2, maxval=10)
+volumeLen = input.int(20, "Volume Average", minval=5)
+volumeMult = input.float(0.9, "Minimum Volume Ratio", minval=0.1, step=0.05)
+rr = input.float(1.8, "Target Risk/Reward", minval=0.5, step=0.1)
+slAtr = input.float(0.25, "SL ATR Buffer", minval=0.0, step=0.05)
+useDxyFilter = input.bool(true, "DXY Confirmation")
+dxySymbol = input.symbol("TVC:DXY", "DXY Symbol")
+
+f_htfBull(tf) =>
+    request.security(syminfo.tickerid, tf, close[1] > ta.ema(close, emaFastLen)[1] and ta.ema(close, emaFastLen)[1] > ta.ema(close, emaTrendLen)[1] and ta.ema(close, emaTrendLen)[1] > ta.ema(close, emaSlowLen)[1] and ta.rising(ta.ema(close, emaTrendLen), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
+f_htfBear(tf) =>
+    request.security(syminfo.tickerid, tf, close[1] < ta.ema(close, emaFastLen)[1] and ta.ema(close, emaFastLen)[1] < ta.ema(close, emaTrendLen)[1] and ta.ema(close, emaTrendLen)[1] < ta.ema(close, emaSlowLen)[1] and ta.falling(ta.ema(close, emaTrendLen), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+h4Bull = f_htfBull("240")
+h1Bull = f_htfBull("60")
+m30Bull = f_htfBull("30")
+h4Bear = f_htfBear("240")
+h1Bear = f_htfBear("60")
+m30Bear = f_htfBear("30")
+
+ema20 = ta.ema(close, emaFastLen)
+ema50 = ta.ema(close, emaTrendLen)
+ema200 = ta.ema(close, emaSlowLen)
+rsi = ta.rsi(close, rsiLen)
+[diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
+atr = ta.atr(atrLen)
+
+ph = ta.pivothigh(high, pivotLen, pivotLen)
+pl = ta.pivotlow(low, pivotLen, pivotLen)
+var float lastSwingHigh = na
+var float lastSwingLow = na
+var float prevSwingHigh = na
+var float prevSwingLow = na
+if not na(ph)
+    prevSwingHigh := lastSwingHigh
+    lastSwingHigh := ph
+if not na(pl)
+    prevSwingLow := lastSwingLow
+    lastSwingLow := pl
+
+bullStructure = not na(lastSwingHigh) and not na(prevSwingHigh) and not na(lastSwingLow) and not na(prevSwingLow) and lastSwingHigh > prevSwingHigh and lastSwingLow > prevSwingLow
+bearStructure = not na(lastSwingHigh) and not na(prevSwingHigh) and not na(lastSwingLow) and not na(prevSwingLow) and lastSwingHigh < prevSwingHigh and lastSwingLow < prevSwingLow
+range = math.max(high - low, syminfo.mintick)
+bullBody = close > open and close >= high - range * 0.35
+bearBody = close < open and close <= low + range * 0.35
+breakBull = not na(lastSwingHigh) and close > lastSwingHigh
+breakBear = not na(lastSwingLow) and close < lastSwingLow
+pullbackBull = ta.lowest(low, 5) <= ema20 or ta.lowest(low, 5) <= ema50
+pullbackBear = ta.highest(high, 5) >= ema20 or ta.highest(high, 5) >= ema50
+volAvg = ta.sma(volume, volumeLen)
+volumeOK = na(volume) or na(volAvg) or volume >= volAvg * volumeMult
+
+m15Bull = close > ema20 and ema20 > ema50 and ema50 > ema200 and ta.rising(ema50, 2) and rsi > 52 and adx >= adxMin and diPlus > diMinus and pullbackBull and bullBody and (breakBull or bullStructure) and volumeOK
+m15Bear = close < ema20 and ema20 < ema50 and ema50 < ema200 and ta.falling(ema50, 2) and rsi < 48 and adx >= adxMin and diMinus > diPlus and pullbackBear and bearBody and (breakBear or bearStructure) and volumeOK
+
+dxyClose = request.security(dxySymbol, "15", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+dxyEma20 = request.security(dxySymbol, "15", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
+dxyBull = dxyClose > dxyEma20
+dxyBear = dxyClose < dxyEma20
+isGold = str.contains(str.upper(syminfo.ticker), "XAU") or str.contains(str.upper(syminfo.description), "GOLD")
+macroBuyOK = not useDxyFilter or not isGold or dxyBear
+macroSellOK = not useDxyFilter or not isGold or dxyBull
+atrBase = ta.sma(atr, 50)
+volatilityOK = na(atrBase) or atr <= atrBase * 2.2
+buySignal = barstate.isconfirmed and h4Bull and h1Bull and m30Bull and m15Bull and macroBuyOK and volatilityOK
+sellSignal = barstate.isconfirmed and h4Bear and h1Bear and m30Bear and m15Bear and macroSellOK and volatilityOK
+
+buySL = na(lastSwingLow) ? close - atr : lastSwingLow - atr * slAtr
+sellSL = na(lastSwingHigh) ? close + atr : lastSwingHigh + atr * slAtr
+buyRisk = math.max(close - buySL, syminfo.mintick)
+sellRisk = math.max(sellSL - close, syminfo.mintick)
+buyTarget = math.max(close + buyRisk * rr, nz(lastSwingHigh, close + atr * rr))
+sellTarget = math.min(close - sellRisk * rr, nz(lastSwingLow, close - atr * rr))
+
+if buySignal and strategy.position_size <= 0
+    strategy.entry("BUY", strategy.long)
+    strategy.exit("BUY-EXIT", "BUY", stop=buySL, limit=buyTarget)
+if sellSignal and strategy.position_size >= 0
+    strategy.entry("SELL", strategy.short)
+    strategy.exit("SELL-EXIT", "SELL", stop=sellSL, limit=sellTarget)
+
+plot(ema20, "EMA 20", color=color.new(color.aqua, 0))
+plot(ema50, "EMA 50", color=color.new(color.orange, 0))
+plot(ema200, "EMA 200", color=color.new(color.blue, 0), linewidth=2)
