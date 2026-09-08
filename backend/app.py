@@ -156,14 +156,6 @@ async def _twelve_quote(symbol: str) -> MarketQuote:
         freshness="Twelve Data quote",
     )
 
-async def _safe_twelve_quote(symbol: str) -> MarketQuote:
-    try:
-        return await _twelve_quote(symbol)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Twelve Data quote error for {symbol}: {exc}") from exc
-
 async def _twelve_candles(symbol: str, timeframe: str = "1h", limit: int = 200) -> list[Candle]:
     symbol = _validate_symbol(symbol)
     interval = _timeframe_interval(timeframe)
@@ -202,7 +194,7 @@ async def quotes(symbols: str = Query(..., min_length=1)) -> list[MarketQuote]:
         raise HTTPException(status_code=400, detail="No symbols supplied")
     if len(requested) > 50:
         raise HTTPException(status_code=400, detail="Maximum 50 symbols per request")
-    return [await _safe_twelve_quote(symbol) for symbol in requested]
+    return [await _twelve_quote(symbol) for symbol in requested]
 
 @app.get("/v1/candles", response_model=list[Candle])
 async def candles(symbol: str, timeframe: str = "1h", limit: int = Query(200, ge=1, le=5000)) -> list[Candle]:
