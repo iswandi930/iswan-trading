@@ -1,9 +1,9 @@
 //@version=5
-strategy("X-Core M15 — Backtest V2", overlay=true, pyramiding=0, process_orders_on_close=true, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.02)
+strategy("X-Core Universal — Backtest V6", overlay=true, pyramiding=0, process_orders_on_close=true, initial_capital=10000, commission_type=strategy.commission.percent, commission_value=0.02)
 
-// Backtest engine for X-Core V2. Use on XAUUSD M15.
-// Entries use the same closed-candle MTF/structure logic as the V2 indicator.
-// This file exists to measure performance; it does not guarantee future results.
+// Universal X-Core backtest: H4 -> H1 -> M30 -> M15, with 5M -> 1M timing on low charts.
+// Use Strategy Tester to measure win rate, profit factor, drawdown, trades and net profit.
+// Results are historical measurements and do not guarantee future performance.
 
 emaFastLen = input.int(20, "EMA Fast", minval=2)
 emaTrendLen = input.int(50, "EMA Trend", minval=5)
@@ -19,11 +19,21 @@ rr = input.float(1.8, "Target Risk/Reward", minval=0.5, step=0.1)
 slAtr = input.float(0.25, "SL ATR Buffer", minval=0.0, step=0.05)
 useDxyFilter = input.bool(true, "DXY Confirmation")
 dxySymbol = input.symbol("TVC:DXY", "DXY Symbol")
+useYieldFilter = input.bool(true, "US 10Y Yield Confirmation")
+yieldSymbol = input.symbol("TVC:US10Y", "US 10Y Yield Symbol")
+useLowerTiming = input.bool(true, "5M + 1M Timing Confirmation")
 
 f_htfBull(tf) =>
     request.security(syminfo.tickerid, tf, close[1] > ta.ema(close, emaFastLen)[1] and ta.ema(close, emaFastLen)[1] > ta.ema(close, emaTrendLen)[1] and ta.ema(close, emaTrendLen)[1] > ta.ema(close, emaSlowLen)[1] and ta.rising(ta.ema(close, emaTrendLen), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
 f_htfBear(tf) =>
     request.security(syminfo.tickerid, tf, close[1] < ta.ema(close, emaFastLen)[1] and ta.ema(close, emaFastLen)[1] < ta.ema(close, emaTrendLen)[1] and ta.ema(close, emaTrendLen)[1] < ta.ema(close, emaSlowLen)[1] and ta.falling(ta.ema(close, emaTrendLen), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+f_htfStructureBull(tf) =>
+    request.security(syminfo.tickerid, tf, ta.pivothigh(high, pivotLen, pivotLen) > ta.pivothigh(high, pivotLen, pivotLen)[pivotLen * 2] and ta.pivotlow(low, pivotLen, pivotLen) > ta.pivotlow(low, pivotLen, pivotLen)[pivotLen * 2], barmerge.gaps_off, barmerge.lookahead_off)
+
+f_htfStructureBear(tf) =>
+    request.security(syminfo.tickerid, tf, ta.pivothigh(high, pivotLen, pivotLen) < ta.pivothigh(high, pivotLen, pivotLen)[pivotLen * 2] and ta.pivotlow(low, pivotLen, pivotLen) < ta.pivotlow(low, pivotLen, pivotLen)[pivotLen * 2], barmerge.gaps_off, barmerge.lookahead_off)
 
 h4Bull = f_htfBull("240")
 h1Bull = f_htfBull("60")
@@ -31,6 +41,43 @@ m30Bull = f_htfBull("30")
 h4Bear = f_htfBear("240")
 h1Bear = f_htfBear("60")
 m30Bear = f_htfBear("30")
+h4StructBull = f_htfStructureBull("240")
+h1StructBull = f_htfStructureBull("60")
+m30StructBull = f_htfStructureBull("30")
+h4StructBear = f_htfStructureBear("240")
+h1StructBear = f_htfStructureBear("60")
+m30StructBear = f_htfStructureBear("30")
+
+f_m15BullCore() =>
+    e20 = ta.ema(close, emaFastLen)
+    e50 = ta.ema(close, emaTrendLen)
+    e200 = ta.ema(close, emaSlowLen)
+    r = ta.rsi(close, rsiLen)
+    [p, m, a] = ta.dmi(adxLen, adxLen)
+    p[1] > m[1] and a[1] >= adxMin and close[1] > e20[1] and e20[1] > e50[1] and e50[1] > e200[1] and ta.rising(e50, 2)[1] and r[1] > 52
+
+f_m15BearCore() =>
+    e20 = ta.ema(close, emaFastLen)
+    e50 = ta.ema(close, emaTrendLen)
+    e200 = ta.ema(close, emaSlowLen)
+    r = ta.rsi(close, rsiLen)
+    [p, m, a] = ta.dmi(adxLen, adxLen)
+    m[1] > p[1] and a[1] >= adxMin and close[1] < e20[1] and e20[1] < e50[1] and e50[1] < e200[1] and ta.falling(e50, 2)[1] and r[1] < 48
+
+f_m15StructureBullCore() =>
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+    not na(ph) and not na(pl) and not na(ph[pivotLen * 2]) and not na(pl[pivotLen * 2]) and ph > ph[pivotLen * 2] and pl > pl[pivotLen * 2]
+
+f_m15StructureBearCore() =>
+    ph = ta.pivothigh(high, pivotLen, pivotLen)
+    pl = ta.pivotlow(low, pivotLen, pivotLen)
+    not na(ph) and not na(pl) and not na(ph[pivotLen * 2]) and not na(pl[pivotLen * 2]) and ph < ph[pivotLen * 2] and pl < pl[pivotLen * 2]
+
+m15Bull = request.security(syminfo.tickerid, "15", f_m15BullCore(), barmerge.gaps_off, barmerge.lookahead_off)
+m15Bear = request.security(syminfo.tickerid, "15", f_m15BearCore(), barmerge.gaps_off, barmerge.lookahead_off)
+m15StructBull = request.security(syminfo.tickerid, "15", f_m15StructureBullCore(), barmerge.gaps_off, barmerge.lookahead_off)
+m15StructBear = request.security(syminfo.tickerid, "15", f_m15StructureBearCore(), barmerge.gaps_off, barmerge.lookahead_off)
 
 ema20 = ta.ema(close, emaFastLen)
 ema50 = ta.ema(close, emaTrendLen)
@@ -38,46 +85,60 @@ ema200 = ta.ema(close, emaSlowLen)
 rsi = ta.rsi(close, rsiLen)
 [diPlus, diMinus, adx] = ta.dmi(adxLen, adxLen)
 atr = ta.atr(atrLen)
-
 ph = ta.pivothigh(high, pivotLen, pivotLen)
 pl = ta.pivotlow(low, pivotLen, pivotLen)
 var float lastSwingHigh = na
 var float lastSwingLow = na
-var float prevSwingHigh = na
-var float prevSwingLow = na
 if not na(ph)
-    prevSwingHigh := lastSwingHigh
     lastSwingHigh := ph
 if not na(pl)
-    prevSwingLow := lastSwingLow
     lastSwingLow := pl
 
-bullStructure = not na(lastSwingHigh) and not na(prevSwingHigh) and not na(lastSwingLow) and not na(prevSwingLow) and lastSwingHigh > prevSwingHigh and lastSwingLow > prevSwingLow
-bearStructure = not na(lastSwingHigh) and not na(prevSwingHigh) and not na(lastSwingLow) and not na(prevSwingLow) and lastSwingHigh < prevSwingHigh and lastSwingLow < prevSwingLow
 range = math.max(high - low, syminfo.mintick)
 bullBody = close > open and close >= high - range * 0.35
 bearBody = close < open and close <= low + range * 0.35
-breakBull = not na(lastSwingHigh) and close > lastSwingHigh
-breakBear = not na(lastSwingLow) and close < lastSwingLow
 pullbackBull = ta.lowest(low, 5) <= ema20 or ta.lowest(low, 5) <= ema50
 pullbackBear = ta.highest(high, 5) >= ema20 or ta.highest(high, 5) >= ema50
 volAvg = ta.sma(volume, volumeLen)
 volumeOK = na(volume) or na(volAvg) or volume >= volAvg * volumeMult
+executionBull = pullbackBull and bullBody and volumeOK
+executionBear = pullbackBear and bearBody and volumeOK
 
-m15Bull = close > ema20 and ema20 > ema50 and ema50 > ema200 and ta.rising(ema50, 2) and rsi > 52 and adx >= adxMin and diPlus > diMinus and pullbackBull and bullBody and (breakBull or bullStructure) and volumeOK
-m15Bear = close < ema20 and ema20 < ema50 and ema50 < ema200 and ta.falling(ema50, 2) and rsi < 48 and adx >= adxMin and diMinus > diPlus and pullbackBear and bearBody and (breakBear or bearStructure) and volumeOK
-
+// Gold-only macro filter; missing external data does not block the test.
 dxyClose = request.security(dxySymbol, "15", close[1], barmerge.gaps_off, barmerge.lookahead_off)
 dxyEma20 = request.security(dxySymbol, "15", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
-dxyBull = dxyClose > dxyEma20
-dxyBear = dxyClose < dxyEma20
+dxyBull = not na(dxyClose) and dxyClose > dxyEma20
+dxyBear = not na(dxyClose) and dxyClose < dxyEma20
+yieldClose = request.security(yieldSymbol, "15", close[1], barmerge.gaps_off, barmerge.lookahead_off)
+yieldEma20 = request.security(yieldSymbol, "15", ta.ema(close, 20)[1], barmerge.gaps_off, barmerge.lookahead_off)
+yieldRising = not na(yieldClose) and yieldClose > yieldEma20
+yieldFalling = not na(yieldClose) and yieldClose < yieldEma20
 isGold = str.contains(str.upper(syminfo.ticker), "XAU") or str.contains(str.upper(syminfo.description), "GOLD")
-macroBuyOK = not useDxyFilter or not isGold or dxyBear
-macroSellOK = not useDxyFilter or not isGold or dxyBull
+macroBuyOK = not isGold or ((not useDxyFilter or na(dxyClose) or dxyBear) and (not useYieldFilter or na(yieldClose) or yieldFalling))
+macroSellOK = not isGold or ((not useDxyFilter or na(dxyClose) or dxyBull) and (not useYieldFilter or na(yieldClose) or yieldRising))
+
 atrBase = ta.sma(atr, 50)
 volatilityOK = na(atrBase) or atr <= atrBase * 2.2
-buySignal = barstate.isconfirmed and h4Bull and h1Bull and m30Bull and m15Bull and macroBuyOK and volatilityOK
-sellSignal = barstate.isconfirmed and h4Bear and h1Bear and m30Bear and m15Bear and macroSellOK and volatilityOK
+htfBullStructureOK = (na(h4StructBull) or h4StructBull) and (na(h1StructBull) or h1StructBull) and (na(m30StructBull) or m30StructBull)
+htfBearStructureOK = (na(h4StructBear) or h4StructBear) and (na(h1StructBear) or h1StructBear) and (na(m30StructBear) or m30StructBear)
+
+f_tfTrendBull(tf) =>
+    request.security(syminfo.tickerid, tf, close[1] > ta.ema(close, 20)[1] and ta.ema(close, 20)[1] > ta.ema(close, 50)[1] and ta.rising(ta.ema(close, 20), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+f_tfTrendBear(tf) =>
+    request.security(syminfo.tickerid, tf, close[1] < ta.ema(close, 20)[1] and ta.ema(close, 20)[1] < ta.ema(close, 50)[1] and ta.falling(ta.ema(close, 20), 2)[1], barmerge.gaps_off, barmerge.lookahead_off)
+
+m5Bull = f_tfTrendBull("5")
+m5Bear = f_tfTrendBear("5")
+m1Bull = f_tfTrendBull("1")
+m1Bear = f_tfTrendBear("1")
+lowerBull = m5Bull and m1Bull
+lowerBear = m5Bear and m1Bear
+chartSeconds = timeframe.in_seconds(timeframe.period)
+useLowerGate = useLowerTiming and not na(chartSeconds) and chartSeconds <= 300
+
+buySignal = barstate.isconfirmed and h4Bull and h1Bull and m30Bull and htfBullStructureOK and m15Bull and m15StructBull and executionBull and macroBuyOK and volatilityOK and (not useLowerGate or lowerBull)
+sellSignal = barstate.isconfirmed and h4Bear and h1Bear and m30Bear and htfBearStructureOK and m15Bear and m15StructBear and executionBear and macroSellOK and volatilityOK and (not useLowerGate or lowerBear)
 
 buySL = na(lastSwingLow) ? close - atr : lastSwingLow - atr * slAtr
 sellSL = na(lastSwingHigh) ? close + atr : lastSwingHigh + atr * slAtr
@@ -88,10 +149,11 @@ sellTarget = math.min(close - sellRisk * rr, nz(lastSwingLow, close - atr * rr))
 
 if buySignal and strategy.position_size <= 0
     strategy.entry("BUY", strategy.long)
-    strategy.exit("BUY-EXIT", "BUY", stop=buySL, limit=buyTarget)
 if sellSignal and strategy.position_size >= 0
     strategy.entry("SELL", strategy.short)
-    strategy.exit("SELL-EXIT", "SELL", stop=sellSL, limit=sellTarget)
+
+strategy.exit("BUY-EXIT", "BUY", stop=buySL, limit=buyTarget)
+strategy.exit("SELL-EXIT", "SELL", stop=sellSL, limit=sellTarget)
 
 plot(ema20, "EMA 20", color=color.new(color.aqua, 0))
 plot(ema50, "EMA 50", color=color.new(color.orange, 0))
