@@ -1,13 +1,14 @@
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import os
 import httpx
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Twelve Data Market Engine", version="1.0.0")
+app = FastAPI(title="Iswan Trading Massive Market Engine", version="2.0.0")
 
+# Symbols exposed by the app. Provider tickers are mapped below.
 SYMBOLS = {
     "XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
     "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCHF", "GBPCHF", "AUDCAD", "AUDCHF", "CADJPY", "CHFJPY",
@@ -16,51 +17,64 @@ SYMBOLS = {
     "AVGO", "JPM", "V", "MA", "SPY", "QQQ", "DIA", "IWM", "GLD", "SLV",
 }
 
-TWELVE_DATA_SYMBOLS = {
-    "XAUUSD": "XAU/USD", "XAGUSD": "XAG/USD", "XPTUSD": "XPT/USD", "XPDUSD": "XPD/USD",
-    "EURUSD": "EUR/USD", "GBPUSD": "GBP/USD", "USDJPY": "USD/JPY", "USDCHF": "USD/CHF",
-    "AUDUSD": "AUD/USD", "USDCAD": "USD/CAD", "NZDUSD": "NZD/USD", "EURGBP": "EUR/GBP",
-    "EURJPY": "EUR/JPY", "GBPJPY": "GBP/JPY", "AUDJPY": "AUD/JPY", "EURAUD": "EUR/AUD",
-    "EURCHF": "EUR/CHF", "GBPCHF": "GBP/CHF", "AUDCAD": "AUD/CAD", "AUDCHF": "AUD/CHF",
-    "CADJPY": "CAD/JPY", "CHFJPY": "CHF/JPY", "NZDJPY": "NZD/JPY", "NZDCHF": "NZD/CHF",
-    "EURNZD": "EUR/NZD", "GBPAUD": "GBP/AUD", "GBPCAD": "GBP/CAD", "GBPNZD": "GBP/NZD",
-    "AUDNZD": "AUD/NZD", "BTCUSD": "BTC/USD", "ETHUSD": "ETH/USD", "SOLUSD": "SOL/USD", "XRPUSD": "XRP/USD",
+# Massive/Polygon-style ticker notation.
+# Forex pairs use C: prefix. Crypto uses X:. US stocks/ETFs are plain tickers.
+MASSIVE_TICKERS = {
+    "XAUUSD": "C:XAUUSD", "XAGUSD": "C:XAGUSD", "XPTUSD": "C:XPTUSD", "XPDUSD": "C:XPDUSD",
+    "EURUSD": "C:EURUSD", "GBPUSD": "C:GBPUSD", "USDJPY": "C:USDJPY", "USDCHF": "C:USDCHF",
+    "AUDUSD": "C:AUDUSD", "USDCAD": "C:USDCAD", "NZDUSD": "C:NZDUSD", "EURGBP": "C:EURGBP",
+    "EURJPY": "C:EURJPY", "GBPJPY": "C:GBPJPY", "AUDJPY": "C:AUDJPY", "EURAUD": "C:EURAUD",
+    "EURCHF": "C:EURCHF", "GBPCHF": "C:GBPCHF", "AUDCAD": "C:AUDCAD", "AUDCHF": "C:AUDCHF",
+    "CADJPY": "C:CADJPY", "CHFJPY": "C:CHFJPY", "NZDJPY": "C:NZDJPY", "NZDCHF": "C:NZDCHF",
+    "EURNZD": "C:EURNZD", "GBPAUD": "C:GBPAUD", "GBPCAD": "C:GBPCAD", "GBPNZD": "C:GBPNZD", "AUDNZD": "C:AUDNZD",
+    "BTCUSD": "X:BTCUSD", "ETHUSD": "X:ETHUSD", "SOLUSD": "X:SOLUSD", "XRPUSD": "X:XRPUSD",
     "AAPL": "AAPL", "MSFT": "MSFT", "NVDA": "NVDA", "AMZN": "AMZN", "META": "META", "TSLA": "TSLA",
     "GOOGL": "GOOGL", "NFLX": "NFLX", "AMD": "AMD", "AVGO": "AVGO", "JPM": "JPM", "V": "V", "MA": "MA",
     "SPY": "SPY", "QQQ": "QQQ", "DIA": "DIA", "IWM": "IWM", "GLD": "GLD", "SLV": "SLV",
-    "USOIL": "WTI", "UKOIL": "BRENT", "NATGAS": "NATURALGAS", "COPPER": "COPPER",
 }
 
-TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
-TWELVE_DATA_BASE = "https://api.twelvedata.com"
-_tw_client = httpx.AsyncClient(
+# Oil/gas/copper are kept configurable because the exact futures contract symbol can change.
+# Defaults use common continuous futures symbols; override in hosting environment if needed.
+MASSIVE_TICKERS.update({
+    "USOIL": os.getenv("MASSIVE_USOIL_TICKER", "CL"),
+    "UKOIL": os.getenv("MASSIVE_UKOIL_TICKER", "BZ"),
+    "NATGAS": os.getenv("MASSIVE_NATGAS_TICKER", "NG"),
+    "COPPER": os.getenv("MASSIVE_COPPER_TICKER", "HG"),
+})
+
+MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY", "").strip()
+MASSIVE_BASE = os.getenv("MASSIVE_BASE_URL", "https://api.massive.com").rstrip("/")
+_client = httpx.AsyncClient(
     timeout=httpx.Timeout(12.0, connect=5.0),
     follow_redirects=True,
-    headers={"Accept": "application/json", "User-Agent": "Iswan-Trading/1.0"},
+    headers={"Accept": "application/json", "User-Agent": "Iswan-Trading/2.0"},
     limits=httpx.Limits(max_connections=40, max_keepalive_connections=40),
 )
 
 @app.on_event("shutdown")
-async def _shutdown_tw_client() -> None:
-    await _tw_client.aclose()
+async def _shutdown_client() -> None:
+    await _client.aclose()
+
 
 def _now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
-async def _twelve_data(path: str, params: dict) -> dict:
-    if not TWELVE_DATA_API_KEY:
-        raise HTTPException(status_code=503, detail="TWELVE_DATA_API_KEY is not configured")
-    params = dict(params)
-    params["apikey"] = TWELVE_DATA_API_KEY
+
+async def _massive(path: str, params: dict | None = None) -> dict:
+    if not MASSIVE_API_KEY:
+        raise HTTPException(status_code=503, detail="MASSIVE_API_KEY is not configured")
+    query = dict(params or {})
+    query["apiKey"] = MASSIVE_API_KEY
     try:
-        response = await _tw_client.get(f"{TWELVE_DATA_BASE}{path}", params=params)
+        response = await _client.get(f"{MASSIVE_BASE}{path}", params=query)
         response.raise_for_status()
         data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail=f"Twelve Data provider connection error: {exc}") from exc
-    if isinstance(data, dict) and data.get("status") == "error":
-        raise HTTPException(status_code=502, detail=f"Twelve Data error: {data.get('message', 'provider error')}")
+        raise HTTPException(status_code=502, detail=f"Massive provider connection error: {exc}") from exc
+    if isinstance(data, dict) and data.get("status") == "ERROR":
+        raise HTTPException(status_code=502, detail=f"Massive error: {data.get('error', data.get('message', 'provider error'))}")
     return data
+
 
 class Candle(BaseModel):
     time: int
@@ -69,6 +83,7 @@ class Candle(BaseModel):
     low: float
     close: float
     volume: float = 0.0
+
 
 class MarketQuote(BaseModel):
     symbol: str
@@ -79,9 +94,11 @@ class MarketQuote(BaseModel):
     live: bool = False
     freshness: str = "unknown"
 
+
 class AnalysisRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
     candles: list[Candle] = Field(min_length=1, max_length=5000)
+
 
 class AnalysisResponse(BaseModel):
     symbol: str
@@ -89,6 +106,7 @@ class AnalysisResponse(BaseModel):
     confidence: int
     trend: str
     rsi: float | None
+
 
 class RiskRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
@@ -98,21 +116,24 @@ class RiskRequest(BaseModel):
     account_equity: float = Field(gt=0)
     risk_percent: float = Field(gt=0, le=10)
 
+
 class BacktestRequest(BaseModel):
     symbol: str = Field(min_length=1, max_length=32)
     candles: list[Candle] = Field(min_length=60, max_length=5000)
     horizon: int = Field(default=3, ge=1, le=50)
     threshold: float = Field(default=0.0, ge=0)
 
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {
         "status": "ok",
-        "service": "iswan-twelve-data-market-engine",
-        "provider": "Twelve Data",
-        "api_key_configured": "true" if TWELVE_DATA_API_KEY else "false",
-        "policy": "twelve-data-only-quotes-and-candles-no-yahoo-fallback",
+        "service": "iswan-massive-market-engine",
+        "provider": "Massive",
+        "api_key_configured": "true" if MASSIVE_API_KEY else "false",
+        "policy": "massive-only-market-data-no-yahoo-or-twelve-fallback",
     }
+
 
 def _validate_symbol(symbol: str) -> str:
     symbol = symbol.upper().strip()
@@ -120,72 +141,100 @@ def _validate_symbol(symbol: str) -> str:
         raise HTTPException(status_code=400, detail=f"Unsupported symbol: {symbol}")
     return symbol
 
-def _timeframe_interval(timeframe: str) -> str:
+
+def _timeframe_spec(timeframe: str) -> tuple[int, str]:
     mapping = {
-        "1m": "1min", "1min": "1min", "5m": "5min", "5min": "5min", "15m": "15min", "15min": "15min",
-        "30m": "30min", "30min": "30min", "1h": "1h", "4h": "4h", "1d": "1day", "1day": "1day",
-        "1w": "1week", "1week": "1week",
+        "1m": (1, "minute"), "1min": (1, "minute"),
+        "5m": (5, "minute"), "5min": (5, "minute"),
+        "15m": (15, "minute"), "15min": (15, "minute"),
+        "30m": (30, "minute"), "30min": (30, "minute"),
+        "1h": (1, "hour"), "2h": (2, "hour"), "3h": (3, "hour"), "4h": (4, "hour"),
+        "1d": (1, "day"), "1day": (1, "day"), "1w": (1, "week"), "1week": (1, "week"),
     }
-    if timeframe not in mapping:
+    key = timeframe.lower().strip()
+    if key not in mapping:
         raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
-    return mapping[timeframe]
+    return mapping[key]
 
-async def _twelve_quote(symbol: str) -> MarketQuote:
+
+def _ticker(symbol: str) -> str:
     symbol = _validate_symbol(symbol)
-    provider_symbol = TWELVE_DATA_SYMBOLS[symbol]
-    data = await _twelve_data("/quote", {"symbol": provider_symbol})
+    return MASSIVE_TICKERS.get(symbol, symbol)
+
+
+def _is_forex(symbol: str) -> bool:
+    return _ticker(symbol).startswith("C:")
+
+
+def _is_crypto(symbol: str) -> bool:
+    return _ticker(symbol).startswith("X:")
+
+
+async def _massive_quote(symbol: str) -> MarketQuote:
+    symbol = _validate_symbol(symbol)
+    ticker = _ticker(symbol)
+    data = await _massive(f"/v2/last/trade/{ticker}")
+    result = data.get("results") if isinstance(data, dict) else None
+    if not isinstance(result, dict):
+        # Some provider plans/endpoints expose previous aggregate even when last-trade is unavailable.
+        prev = await _massive(f"/v2/aggs/ticker/{ticker}/prev")
+        results = prev.get("results") if isinstance(prev, dict) else None
+        if not isinstance(results, list) or not results:
+            raise HTTPException(status_code=502, detail=f"Massive returned no valid price for {symbol}")
+        row = results[0]
+        price = float(row.get("c"))
+        market_time = int(row.get("t")) if row.get("t") is not None else None
+        return MarketQuote(symbol=symbol, price=price, marketTime=market_time, source=f"Massive ({ticker})", live=False, freshness="previous aggregate")
+
+    price_value = result.get("p", result.get("price"))
+    if price_value is None:
+        price_value = result.get("c")
     try:
-        price = float(data["close"])
-    except (KeyError, TypeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail=f"Twelve Data returned no valid price for {symbol}") from exc
-    change = data.get("percent_change")
-    change_pct = float(change) if change not in (None, "") else None
-    market_time = None
-    if data.get("timestamp") not in (None, ""):
-        try:
-            market_time = int(float(data["timestamp"]) * 1000)
-        except (TypeError, ValueError):
-            market_time = None
-    return MarketQuote(
-        symbol=symbol,
-        price=price,
-        changePercent=change_pct,
-        marketTime=market_time,
-        source=f"Twelve Data ({provider_symbol})",
-        live=True,
-        freshness="Twelve Data quote",
-    )
+        price = float(price_value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=f"Massive returned no valid price for {symbol}") from exc
+    market_time = result.get("t", result.get("timestamp"))
+    try:
+        market_time = int(market_time) if market_time is not None else None
+    except (TypeError, ValueError):
+        market_time = None
+    return MarketQuote(symbol=symbol, price=price, marketTime=market_time, source=f"Massive ({ticker})", live=True, freshness="last trade")
 
-async def _twelve_candles(symbol: str, timeframe: str = "1h", limit: int = 200) -> list[Candle]:
+
+async def _massive_candles(symbol: str, timeframe: str = "1h", limit: int = 200) -> list[Candle]:
     symbol = _validate_symbol(symbol)
-    interval = _timeframe_interval(timeframe)
-    provider_symbol = TWELVE_DATA_SYMBOLS[symbol]
-    data = await _twelve_data("/time_series", {
-        "symbol": provider_symbol,
-        "interval": interval,
-        "outputsize": max(1, min(limit, 5000)),
-        "order": "asc",
-    })
-    values = data.get("values") if isinstance(data, dict) else None
+    multiplier, timespan = _timeframe_spec(timeframe)
+    ticker = _ticker(symbol)
+    limit = max(1, min(limit, 5000))
+    # Request a generous time window; Massive returns at most the requested number of aggregates.
+    now = datetime.now(timezone.utc)
+    if timespan == "minute":
+        start = now - timedelta(minutes=multiplier * limit * 2)
+    elif timespan == "hour":
+        start = now - timedelta(hours=multiplier * limit * 2)
+    elif timespan == "day":
+        start = now - timedelta(days=multiplier * limit * 2)
+    else:
+        start = now - timedelta(days=7 * multiplier * limit * 2)
+    path = f"/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{start.date().isoformat()}/{now.date().isoformat()}"
+    data = await _massive(path, {"adjusted": "true", "sort": "asc", "limit": limit})
+    values = data.get("results") if isinstance(data, dict) else None
     if not isinstance(values, list):
-        raise HTTPException(status_code=502, detail=f"Twelve Data returned no candles for {symbol}")
+        raise HTTPException(status_code=502, detail=f"Massive returned no candles for {symbol}")
     candles: list[Candle] = []
     for row in values:
         try:
-            dt = datetime.fromisoformat(str(row["datetime"]).replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            ts = int(dt.timestamp() * 1000)
             candles.append(Candle(
-                time=ts,
-                open=float(row["open"]), high=float(row["high"]), low=float(row["low"]), close=float(row["close"]),
-                volume=float(row.get("volume", 0) or 0),
+                time=int(row["t"]),
+                open=float(row["o"]), high=float(row["h"]), low=float(row["l"]), close=float(row["c"]),
+                volume=float(row.get("v", 0) or 0),
             ))
         except (KeyError, TypeError, ValueError):
             continue
     if not candles:
-        raise HTTPException(status_code=502, detail=f"Twelve Data returned no valid candles for {symbol}")
-    return candles
+        raise HTTPException(status_code=502, detail=f"Massive returned no valid candles for {symbol}")
+    return candles[-limit:]
+
 
 @app.get("/v1/quotes", response_model=list[MarketQuote])
 async def quotes(symbols: str = Query(..., min_length=1)) -> list[MarketQuote]:
@@ -194,17 +243,20 @@ async def quotes(symbols: str = Query(..., min_length=1)) -> list[MarketQuote]:
         raise HTTPException(status_code=400, detail="No symbols supplied")
     if len(requested) > 50:
         raise HTTPException(status_code=400, detail="Maximum 50 symbols per request")
-    return [await _twelve_quote(symbol) for symbol in requested]
+    return [await _massive_quote(symbol) for symbol in requested]
+
 
 @app.get("/v1/candles", response_model=list[Candle])
 async def candles(symbol: str, timeframe: str = "1h", limit: int = Query(200, ge=1, le=5000)) -> list[Candle]:
-    return await _twelve_candles(symbol, timeframe, limit)
+    return await _massive_candles(symbol, timeframe, limit)
+
 
 @app.post("/v1/analyze", response_model=AnalysisResponse)
 async def analyze(request: AnalysisRequest) -> AnalysisResponse:
     closes = [c.close for c in request.candles]
     result = analyze_closes(closes)
     return AnalysisResponse(symbol=request.symbol.upper(), **result)
+
 
 @app.post("/v1/risk")
 def risk(request: RiskRequest) -> dict:
@@ -213,6 +265,7 @@ def risk(request: RiskRequest) -> dict:
     reward_distance = abs(request.take_profit - request.entry)
     rr = reward_distance / stop_distance if stop_distance else None
     return {"symbol": request.symbol.upper(), "riskAmount": risk_amount, "stopDistance": stop_distance, "rewardDistance": reward_distance, "riskReward": rr}
+
 
 @app.post("/v1/backtest")
 def backtest(request: BacktestRequest) -> dict:
@@ -228,17 +281,18 @@ def backtest(request: BacktestRequest) -> dict:
     accuracy = (wins / total * 100) if total else 0.0
     return {"symbol": request.symbol.upper(), "samples": total, "wins": wins, "losses": losses, "accuracy": accuracy}
 
+
 @app.get("/v1/self-test")
 async def self_test(symbol: str = "XAUUSD") -> dict:
     symbol = _validate_symbol(symbol)
-    quote = await _twelve_quote(symbol)
-    test_candles = await _twelve_candles(symbol, "1h", 5)
+    quote = await _massive_quote(symbol)
+    test_candles = await _massive_candles(symbol, "1h", 5)
     return {
         "ok": True,
         "symbol": symbol,
         "quote": quote.model_dump(),
         "candles": len(test_candles),
-        "provider": "Twelve Data",
-        "no_yahoo_fallback": True,
+        "provider": "Massive",
+        "no_yahoo_or_twelve_fallback": True,
         "checkedAt": _now_ms(),
     }
