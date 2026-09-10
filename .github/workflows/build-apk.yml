@@ -21,35 +21,45 @@ jobs:
           python-version: '3.12'
       - name: Validate Python backend syntax
         run: python -m compileall -q backend
-      - name: Verify Massive secret and API connectivity
+      - name: Verify Massive secret and diagnose API access
         run: |
           python - <<'PY'
           import os
           import sys
           import urllib.parse
           import urllib.request
+          import urllib.error
 
           key = os.environ.get("MASSIVE_API_KEY", "").strip()
           if not key:
               print("MASSIVE_API_KEY is not available to this workflow.", file=sys.stderr)
               sys.exit(1)
 
-          url = "https://api.massive.com/v2/last/trade/C:XAUUSD?" + urllib.parse.urlencode({"apiKey": key})
+          endpoint = "https://api.massive.com/v2/last/trade/C:XAUUSD"
+          url = endpoint + "?" + urllib.parse.urlencode({"apiKey": key})
           request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Iswan-Trading-CI/1.0"})
           try:
               with urllib.request.urlopen(request, timeout=15) as response:
                   status = response.status
                   body = response.read().decode("utf-8", errors="replace")
+          except urllib.error.HTTPError as exc:
+              body = exc.read().decode("utf-8", errors="replace")
+              print(f"Massive returned HTTP {exc.code}.", file=sys.stderr)
+              print("Provider response body (API key omitted):", file=sys.stderr)
+              print(body[:4000], file=sys.stderr)
+              sys.exit(1)
           except Exception as exc:
-              print(f"Massive connectivity check failed: {exc}", file=sys.stderr)
+              print(f"Massive connectivity check failed: {type(exc).__name__}: {exc}", file=sys.stderr)
               sys.exit(1)
 
           if status != 200:
               print(f"Massive returned HTTP {status}.", file=sys.stderr)
+              print(body[:4000], file=sys.stderr)
               sys.exit(1)
 
           if '"status":"ERROR"' in body or '"status": "ERROR"' in body:
               print("Massive rejected the API request.", file=sys.stderr)
+              print(body[:4000], file=sys.stderr)
               sys.exit(1)
 
           print("Massive API connectivity check passed for XAUUSD. API key value is not printed.")
