@@ -21,9 +21,10 @@ jobs:
           python-version: '3.12'
       - name: Validate Python backend syntax
         run: python -m compileall -q backend
-      - name: Verify Massive secret and diagnose API access
+      - name: Check Massive API access without blocking the APK build
         run: |
           python - <<'PY'
+          import json
           import os
           import sys
           import urllib.parse
@@ -37,32 +38,40 @@ jobs:
 
           endpoint = "https://api.massive.com/v2/last/trade/C:XAUUSD"
           url = endpoint + "?" + urllib.parse.urlencode({"apiKey": key})
-          request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "Iswan-Trading-CI/1.0"})
+          request = urllib.request.Request(
+              url,
+              headers={"Accept": "application/json", "User-Agent": "Iswan-Trading-CI/1.0"},
+          )
+
           try:
               with urllib.request.urlopen(request, timeout=15) as response:
                   status = response.status
                   body = response.read().decode("utf-8", errors="replace")
           except urllib.error.HTTPError as exc:
+              status = exc.code
               body = exc.read().decode("utf-8", errors="replace")
-              print(f"Massive returned HTTP {exc.code}.", file=sys.stderr)
-              print("Provider response body (API key omitted):", file=sys.stderr)
-              print(body[:4000], file=sys.stderr)
-              sys.exit(1)
           except Exception as exc:
               print(f"Massive connectivity check failed: {type(exc).__name__}: {exc}", file=sys.stderr)
               sys.exit(1)
 
-          if status != 200:
-              print(f"Massive returned HTTP {status}.", file=sys.stderr)
-              print(body[:4000], file=sys.stderr)
-              sys.exit(1)
+          try:
+              payload = json.loads(body)
+          except json.JSONDecodeError:
+              payload = {}
 
-          if '"status":"ERROR"' in body or '"status": "ERROR"' in body:
-              print("Massive rejected the API request.", file=sys.stderr)
-              print(body[:4000], file=sys.stderr)
-              sys.exit(1)
+          provider_status = str(payload.get("status", ""))
+          message = str(payload.get("message", ""))
 
-          print("Massive API connectivity check passed for XAUUSD. API key value is not printed.")
+          if status == 200 and provider_status != "ERROR":
+              print("Massive API connectivity check passed for XAUUSD. API key value is not printed.")
+          elif provider_status == "NOT_AUTHORIZED" and "not entitled to this data" in message.lower():
+              print("WARNING: Massive key is present, but the current plan is not entitled to XAUUSD data. APK build will continue.")
+          elif status in (401, 403) or provider_status in {"NOT_AUTHORIZED", "ERROR"}:
+              print("Massive rejected the request; APK build will continue, but live data may be unavailable until provider access is fixed.", file=sys.stderr)
+              print(body[:4000], file=sys.stderr)
+          else:
+              print(f"Massive returned HTTP {status}; APK build will continue.")
+              print(body[:1000])
           PY
       - name: Set up JDK 17
         uses: actions/setup-java@v4
