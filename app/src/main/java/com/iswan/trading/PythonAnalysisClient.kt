@@ -44,8 +44,15 @@ class PythonAnalysisClient(private val baseUrl: String) {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return@withContext null
                 val json = JSONObject(response.body?.string() ?: return@withContext null)
-                val signal = runCatching { Signal.valueOf(json.optString("signal", "NEUTRAL").uppercase()) }.getOrDefault(Signal.NEUTRAL)
-                AnalysisResult(signal, json.optInt("confidence", 0), json.optString("trend", "N/A"), json.optDouble("rsi", Double.NaN).takeUnless { it.isNaN() })
+                val signal = runCatching {
+                    Signal.valueOf(json.optString("signal", "NEUTRAL").uppercase())
+                }.getOrDefault(Signal.NEUTRAL)
+                AnalysisResult(
+                    signal,
+                    json.optInt("confidence", 0),
+                    json.optString("trend", "N/A"),
+                    json.optDouble("rsi", Double.NaN).takeUnless { it.isNaN() }
+                )
             }
         } catch (_: Exception) {
             null
