@@ -46,6 +46,7 @@ private fun IswanTradingApp(context: Context) {
     var selected by remember { mutableStateOf<String?>(null) }
     var prices by remember { mutableStateOf<Map<String, MarketQuote>>(emptyMap()) }
     var marketError by remember { mutableStateOf<String?>(null) }
+    var marketError by remember { mutableStateOf<String?>(null) }
     var watchlist by remember { mutableStateOf(loadWatchlist(context)) }
     var pythonBaseUrl by remember { mutableStateOf(loadPythonBaseUrl(context)) }
     val markets = remember { MarketCatalog.markets }
@@ -54,6 +55,7 @@ private fun IswanTradingApp(context: Context) {
         while (isActive) {
             val next = repository.getPrices(markets.map { it.symbol })
             if (next.isNotEmpty()) prices = next
+            marketError = repository.lastError
             marketError = repository.lastError
             delay(1000)
         }
@@ -72,6 +74,14 @@ private fun IswanTradingApp(context: Context) {
                         }, color = if (marketError != null) Color.Red else Color.Gray)
                     }
                     if (marketError != null) Text("Data: $marketError", color = Color.Red, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp))
+                    if (marketError != null) {
+                        Text(
+                            "Data: ${marketError}",
+                            color = Color.Red,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 2.dp)
+                        )
+                    }
                     when (screen) {
                         "Markets" -> MarketsScreen(markets, prices, watchlist, { selected = it }) { symbol -> watchlist = toggleWatchlist(context, watchlist, symbol) }
                         "Watchlist" -> MarketsScreen(markets.filter { watchlist.contains(it.symbol) }, prices, watchlist, { selected = it }) { symbol -> watchlist = toggleWatchlist(context, watchlist, symbol) }
@@ -112,10 +122,12 @@ private fun MarketDetailScreen(symbol: String, quote: MarketQuote?, repo: Candle
     var timeframe by remember { mutableStateOf(TIMEFRAMES[1]) }
     var candles by remember(symbol, timeframe) { mutableStateOf<List<Candle>>(emptyList()) }
     var candleError by remember(symbol, timeframe) { mutableStateOf<String?>(null) }
+    var candleError by remember(symbol, timeframe) { mutableStateOf<String?>(null) }
     LaunchedEffect(symbol, timeframe) {
         while (isActive) {
             val next = repo.getCandles(symbol, "1d", timeframe.apiValue)
             if (next.isNotEmpty()) candles = next
+            candleError = repo.lastError
             candleError = repo.lastError
             delay(1000)
         }
