@@ -1,14 +1,18 @@
+from __future__ import annotations
+
+import asyncio
+import math
+import time
+from datetime import datetime, timezone
+
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
-from datetime import datetime, timezone, timedelta
-import os
-import httpx
 
 from analysis_engine import analyze_closes
 
-app = FastAPI(title="Iswan Trading Massive Market Engine", version="2.0.0")
+app = FastAPI(title="Iswan Trading Market Engine", version="3.0.0")
 
-# Symbols exposed by the app. Provider tickers are mapped below.
 SYMBOLS = {
     "XAUUSD", "XAGUSD", "XPTUSD", "XPDUSD", "EURUSD", "GBPUSD", "USDJPY", "USDCHF", "AUDUSD", "USDCAD", "NZDUSD",
     "EURGBP", "EURJPY", "GBPJPY", "AUDJPY", "EURAUD", "EURCHF", "GBPCHF", "AUDCAD", "AUDCHF", "CADJPY", "CHFJPY",
@@ -17,63 +21,55 @@ SYMBOLS = {
     "AVGO", "JPM", "V", "MA", "SPY", "QQQ", "DIA", "IWM", "GLD", "SLV",
 }
 
-# Massive/Polygon-style ticker notation.
-# Forex pairs use C: prefix. Crypto uses X:. US stocks/ETFs are plain tickers.
-MASSIVE_TICKERS = {
-    "XAUUSD": "C:XAUUSD", "XAGUSD": "C:XAGUSD", "XPTUSD": "C:XPTUSD", "XPDUSD": "C:XPDUSD",
-    "EURUSD": "C:EURUSD", "GBPUSD": "C:GBPUSD", "USDJPY": "C:USDJPY", "USDCHF": "C:USDCHF",
-    "AUDUSD": "C:AUDUSD", "USDCAD": "C:USDCAD", "NZDUSD": "C:NZDUSD", "EURGBP": "C:EURGBP",
-    "EURJPY": "C:EURJPY", "GBPJPY": "C:GBPJPY", "AUDJPY": "C:AUDJPY", "EURAUD": "C:EURAUD",
-    "EURCHF": "C:EURCHF", "GBPCHF": "C:GBPCHF", "AUDCAD": "C:AUDCAD", "AUDCHF": "C:AUDCHF",
-    "CADJPY": "C:CADJPY", "CHFJPY": "C:CHFJPY", "NZDJPY": "C:NZDJPY", "NZDCHF": "C:NZDCHF",
-    "EURNZD": "C:EURNZD", "GBPAUD": "C:GBPAUD", "GBPCAD": "C:GBPCAD", "GBPNZD": "C:GBPNZD", "AUDNZD": "C:AUDNZD",
-    "BTCUSD": "X:BTCUSD", "ETHUSD": "X:ETHUSD", "SOLUSD": "X:SOLUSD", "XRPUSD": "X:XRPUSD",
+YAHOO_SYMBOLS = {
+    "XAUUSD": "GC=F", "XAGUSD": "SI=F", "XPTUSD": "PL=F", "XPDUSD": "PA=F",
+    "EURUSD": "EURUSD=X", "GBPUSD": "GBPUSD=X", "USDJPY": "JPY=X", "USDCHF": "CHF=X",
+    "AUDUSD": "AUDUSD=X", "USDCAD": "CAD=X", "NZDUSD": "NZDUSD=X", "EURGBP": "EURGBP=X",
+    "EURJPY": "EURJPY=X", "GBPJPY": "GBPJPY=X", "AUDJPY": "AUDJPY=X", "EURAUD": "EURAUD=X",
+    "EURCHF": "EURCHF=X", "GBPCHF": "GBPCHF=X", "AUDCAD": "AUDCAD=X", "AUDCHF": "AUDCHF=X",
+    "CADJPY": "CADJPY=X", "CHFJPY": "CHFJPY=X", "NZDJPY": "NZDJPY=X", "NZDCHF": "NZDCHF=X",
+    "EURNZD": "EURNZD=X", "GBPAUD": "GBPAUD=X", "GBPCAD": "GBPCAD=X", "GBPNZD": "GBPNZD=X", "AUDNZD": "AUDNZD=X",
+    "USOIL": "CL=F", "UKOIL": "BZ=F", "NATGAS": "NG=F", "COPPER": "HG=F",
+    "BTCUSD": "BTC-USD", "ETHUSD": "ETH-USD", "SOLUSD": "SOL-USD", "XRPUSD": "XRP-USD",
     "AAPL": "AAPL", "MSFT": "MSFT", "NVDA": "NVDA", "AMZN": "AMZN", "META": "META", "TSLA": "TSLA",
     "GOOGL": "GOOGL", "NFLX": "NFLX", "AMD": "AMD", "AVGO": "AVGO", "JPM": "JPM", "V": "V", "MA": "MA",
     "SPY": "SPY", "QQQ": "QQQ", "DIA": "DIA", "IWM": "IWM", "GLD": "GLD", "SLV": "SLV",
 }
 
-# Oil/gas/copper are kept configurable because the exact futures contract symbol can change.
-# Defaults use common continuous futures symbols; override in hosting environment if needed.
-MASSIVE_TICKERS.update({
-    "USOIL": os.getenv("MASSIVE_USOIL_TICKER", "CL"),
-    "UKOIL": os.getenv("MASSIVE_UKOIL_TICKER", "BZ"),
-    "NATGAS": os.getenv("MASSIVE_NATGAS_TICKER", "NG"),
-    "COPPER": os.getenv("MASSIVE_COPPER_TICKER", "HG"),
-})
-
-MASSIVE_API_KEY = os.getenv("MASSIVE_API_KEY", "").strip()
-MASSIVE_BASE = os.getenv("MASSIVE_BASE_URL", "https://api.massive.com").rstrip("/")
 _client = httpx.AsyncClient(
-    timeout=httpx.Timeout(12.0, connect=5.0),
+    timeout=httpx.Timeout(8.0, connect=3.0),
     follow_redirects=True,
-    headers={"Accept": "application/json", "User-Agent": "Iswan-Trading/2.0"},
+    headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
     limits=httpx.Limits(max_connections=40, max_keepalive_connections=40),
 )
 
 @app.on_event("shutdown")
-async def _shutdown_client() -> None:
+async def shutdown() -> None:
     await _client.aclose()
 
 
-def _now_ms() -> int:
+def now_ms() -> int:
     return int(datetime.now(timezone.utc).timestamp() * 1000)
 
 
-async def _massive(path: str, params: dict | None = None) -> dict:
-    if not MASSIVE_API_KEY:
-        raise HTTPException(status_code=503, detail="MASSIVE_API_KEY is not configured")
-    query = dict(params or {})
-    query["apiKey"] = MASSIVE_API_KEY
+async def yahoo_chart(symbol: str, range_: str, interval: str) -> dict:
+    symbol = symbol.upper().strip()
+    if symbol not in SYMBOLS:
+        raise HTTPException(status_code=404, detail=f"Unsupported symbol: {symbol}")
+    yahoo = YAHOO_SYMBOLS[symbol]
     try:
-        response = await _client.get(f"{MASSIVE_BASE}{path}", params=query)
+        response = await _client.get(
+            f"https://query1.finance.yahoo.com/v8/finance/chart/{yahoo}",
+            params={"range": range_, "interval": interval, "includePrePost": "true", "events": "div,splits"},
+        )
         response.raise_for_status()
         data = response.json()
     except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail=f"Massive provider connection error: {exc}") from exc
-    if isinstance(data, dict) and data.get("status") == "ERROR":
-        raise HTTPException(status_code=502, detail=f"Massive error: {data.get('error', data.get('message', 'provider error'))}")
-    return data
+        raise HTTPException(status_code=502, detail=f"Market provider connection error: {exc}") from exc
+    result = ((data.get("chart") or {}).get("result") or []) if isinstance(data, dict) else []
+    if not result:
+        raise HTTPException(status_code=502, detail=f"Market provider returned no data for {symbol}")
+    return result[0]
 
 
 class Candle(BaseModel):
@@ -125,137 +121,117 @@ class BacktestRequest(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict:
     return {
         "status": "ok",
-        "service": "iswan-massive-market-engine",
-        "provider": "Massive",
-        "api_key_configured": "true" if MASSIVE_API_KEY else "false",
-        "policy": "massive-only-market-data-no-yahoo-or-twelve-fallback",
+        "service": "iswan-market-engine",
+        "provider": "Yahoo Finance chart endpoint",
+        "policy": "same-source-quotes-and-candles-no-fake-prices",
+        "checkedAt": now_ms(),
     }
 
 
-def _validate_symbol(symbol: str) -> str:
-    symbol = symbol.upper().strip()
-    if symbol not in SYMBOLS:
-        raise HTTPException(status_code=400, detail=f"Unsupported symbol: {symbol}")
-    return symbol
+async def yahoo_quote(symbol: str) -> MarketQuote:
+    result = await yahoo_chart(symbol, "1d", "1m")
+    meta = result.get("meta") or {}
+    quote_rows = ((result.get("indicators") or {}).get("quote") or [])
+    quote = quote_rows[0] if quote_rows else {}
+    closes = quote.get("close") or []
+    price = meta.get("regularMarketPrice")
+    if price is None:
+        valid = [x for x in closes if x is not None]
+        price = valid[-1] if valid else None
+    if price is None:
+        raise HTTPException(status_code=502, detail=f"No valid price for {symbol}")
+    previous = meta.get("previousClose")
+    change = None if previous in (None, 0) else (float(price) - float(previous)) / float(previous) * 100.0
+    market_time = meta.get("regularMarketTime")
+    if market_time is None:
+        timestamps = result.get("timestamp") or []
+        market_time = timestamps[-1] if timestamps else int(time.time())
+    return MarketQuote(
+        symbol=symbol, price=float(price), changePercent=change,
+        marketTime=int(market_time) * 1000,
+        source=f"Yahoo Finance ({YAHOO_SYMBOLS[symbol]})", live=False,
+        freshness="Yahoo chart",
+    )
 
 
-def _timeframe_spec(timeframe: str) -> tuple[int, str]:
-    mapping = {
-        "1m": (1, "minute"), "1min": (1, "minute"),
-        "5m": (5, "minute"), "5min": (5, "minute"),
-        "15m": (15, "minute"), "15min": (15, "minute"),
-        "30m": (30, "minute"), "30min": (30, "minute"),
-        "1h": (1, "hour"), "2h": (2, "hour"), "3h": (3, "hour"), "4h": (4, "hour"),
-        "1d": (1, "day"), "1day": (1, "day"), "1w": (1, "week"), "1week": (1, "week"),
-    }
-    key = timeframe.lower().strip()
-    if key not in mapping:
-        raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
-    return mapping[key]
-
-
-def _ticker(symbol: str) -> str:
-    symbol = _validate_symbol(symbol)
-    return MASSIVE_TICKERS.get(symbol, symbol)
-
-
-def _is_forex(symbol: str) -> bool:
-    return _ticker(symbol).startswith("C:")
-
-
-def _is_crypto(symbol: str) -> bool:
-    return _ticker(symbol).startswith("X:")
-
-
-async def _massive_quote(symbol: str) -> MarketQuote:
-    symbol = _validate_symbol(symbol)
-    ticker = _ticker(symbol)
-    data = await _massive(f"/v2/last/trade/{ticker}")
-    result = data.get("results") if isinstance(data, dict) else None
-    if not isinstance(result, dict):
-        # Some provider plans/endpoints expose previous aggregate even when last-trade is unavailable.
-        prev = await _massive(f"/v2/aggs/ticker/{ticker}/prev")
-        results = prev.get("results") if isinstance(prev, dict) else None
-        if not isinstance(results, list) or not results:
-            raise HTTPException(status_code=502, detail=f"Massive returned no valid price for {symbol}")
-        row = results[0]
-        price = float(row.get("c"))
-        market_time = int(row.get("t")) if row.get("t") is not None else None
-        return MarketQuote(symbol=symbol, price=price, marketTime=market_time, source=f"Massive ({ticker})", live=False, freshness="previous aggregate")
-
-    price_value = result.get("p", result.get("price"))
-    if price_value is None:
-        price_value = result.get("c")
-    try:
-        price = float(price_value)
-    except (TypeError, ValueError) as exc:
-        raise HTTPException(status_code=502, detail=f"Massive returned no valid price for {symbol}") from exc
-    market_time = result.get("t", result.get("timestamp"))
-    try:
-        market_time = int(market_time) if market_time is not None else None
-    except (TypeError, ValueError):
-        market_time = None
-    return MarketQuote(symbol=symbol, price=price, marketTime=market_time, source=f"Massive ({ticker})", live=True, freshness="last trade")
-
-
-async def _massive_candles(symbol: str, timeframe: str = "1h", limit: int = 200) -> list[Candle]:
-    symbol = _validate_symbol(symbol)
-    multiplier, timespan = _timeframe_spec(timeframe)
-    ticker = _ticker(symbol)
-    limit = max(1, min(limit, 5000))
-    # Request a generous time window; Massive returns at most the requested number of aggregates.
-    now = datetime.now(timezone.utc)
-    if timespan == "minute":
-        start = now - timedelta(minutes=multiplier * limit * 2)
-    elif timespan == "hour":
-        start = now - timedelta(hours=multiplier * limit * 2)
-    elif timespan == "day":
-        start = now - timedelta(days=multiplier * limit * 2)
-    else:
-        start = now - timedelta(days=7 * multiplier * limit * 2)
-    path = f"/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{start.date().isoformat()}/{now.date().isoformat()}"
-    data = await _massive(path, {"adjusted": "true", "sort": "asc", "limit": limit})
-    values = data.get("results") if isinstance(data, dict) else None
-    if not isinstance(values, list):
-        raise HTTPException(status_code=502, detail=f"Massive returned no candles for {symbol}")
-    candles: list[Candle] = []
-    for row in values:
-        try:
-            candles.append(Candle(
-                time=int(row["t"]),
-                open=float(row["o"]), high=float(row["h"]), low=float(row["l"]), close=float(row["c"]),
-                volume=float(row.get("v", 0) or 0),
-            ))
-        except (KeyError, TypeError, ValueError):
+def rows_to_candles(result: dict, limit: int) -> list[Candle]:
+    timestamps = result.get("timestamp") or []
+    quote_rows = ((result.get("indicators") or {}).get("quote") or [])
+    quote = quote_rows[0] if quote_rows else {}
+    opens, highs, lows, closes, volumes = [quote.get(k) or [] for k in ("open", "high", "low", "close", "volume")]
+    out: list[Candle] = []
+    for i, ts in enumerate(timestamps):
+        values = [a[i] if i < len(a) else None for a in (opens, highs, lows, closes)]
+        if any(v is None for v in values):
             continue
-    if not candles:
-        raise HTTPException(status_code=502, detail=f"Massive returned no valid candles for {symbol}")
-    return candles[-limit:]
+        o, h, l, c = map(float, values)
+        v = float(volumes[i]) if i < len(volumes) and volumes[i] is not None else 0.0
+        if all(math.isfinite(x) for x in (o, h, l, c, v)) and h >= max(o, c) and l <= min(o, c):
+            out.append(Candle(time=int(ts) * 1000, open=o, high=h, low=l, close=c, volume=v))
+    return out[-limit:]
+
+
+def aggregate(rows: list[Candle], minutes: int) -> list[Candle]:
+    if not rows:
+        return []
+    bucket_ms = minutes * 60_000
+    grouped: dict[int, list[Candle]] = {}
+    for row in rows:
+        grouped.setdefault((row.time // bucket_ms) * bucket_ms, []).append(row)
+    return [Candle(time=k, open=v[0].open, high=max(x.high for x in v), low=min(x.low for x in v), close=v[-1].close, volume=sum(x.volume for x in v)) for k, v in sorted(grouped.items())]
 
 
 @app.get("/v1/quotes", response_model=list[MarketQuote])
 async def quotes(symbols: str = Query(..., min_length=1)) -> list[MarketQuote]:
     requested = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    if not requested:
-        raise HTTPException(status_code=400, detail="No symbols supplied")
     if len(requested) > 50:
         raise HTTPException(status_code=400, detail="Maximum 50 symbols per request")
-    return [await _massive_quote(symbol) for symbol in requested]
+    results = await asyncio.gather(*(yahoo_quote(s) for s in requested), return_exceptions=True)
+    out = []
+    for result in results:
+        if isinstance(result, MarketQuote):
+            out.append(result)
+    return out
 
 
 @app.get("/v1/candles", response_model=list[Candle])
-async def candles(symbol: str, timeframe: str = "1h", limit: int = Query(200, ge=1, le=5000)) -> list[Candle]:
-    return await _massive_candles(symbol, timeframe, limit)
+async def candles(symbol: str, timeframe: str = "5m", limit: int = Query(160, ge=21, le=1000)) -> list[Candle]:
+    key = timeframe.lower().strip()
+    specs = {
+        "1m": ("1d", "1m", None), "5m": ("5d", "5m", None), "15m": ("5d", "15m", None),
+        "30m": ("1mo", "30m", None), "1h": ("3mo", "1h", None), "4h": ("6mo", "1h", 240), "1d": ("2y", "1d", None),
+        "1min": ("1d", "1m", None), "5min": ("5d", "5m", None), "15min": ("5d", "15m", None),
+        "30min": ("1mo", "30m", None), "1day": ("2y", "1d", None),
+    }
+    spec = specs.get(key)
+    if spec is None:
+        raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
+    range_, interval, aggregation = spec
+    result = await yahoo_chart(symbol, range_, interval)
+    rows = rows_to_candles(result, 1000 if aggregation else limit)
+    if aggregation:
+        return aggregate(rows, aggregation)[-limit:]
+    return rows[-limit:]
+
+
+@app.get("/v1/self-test")
+async def self_test(symbol: str = "XAUUSD") -> dict:
+    started = time.perf_counter()
+    quote = await yahoo_quote(symbol)
+    checks = {}
+    for label, key in {"1M": "1m", "5M": "5m", "15M": "15m", "30M": "30m", "1H": "1h", "4H": "4h", "1D": "1d"}.items():
+        rows = await candles(symbol, key, 80)
+        valid = len(rows) >= 21 and all(r.high >= max(r.open, r.close) and r.low <= min(r.open, r.close) for r in rows)
+        checks[label] = {"ok": valid, "count": len(rows), "latestClose": rows[-1].close if rows else None}
+    return {"status": "PASS" if all(x["ok"] for x in checks.values()) else "FAIL", "symbol": symbol.upper(), "quote": quote.model_dump(), "timeframes": checks, "latencyMs": round((time.perf_counter() - started) * 1000, 1)}
 
 
 @app.post("/v1/analyze", response_model=AnalysisResponse)
-async def analyze(request: AnalysisRequest) -> AnalysisResponse:
-    closes = [c.close for c in request.candles]
-    result = analyze_closes(closes)
-    return AnalysisResponse(symbol=request.symbol.upper(), **result)
+def analyze(request: AnalysisRequest) -> AnalysisResponse:
+    return AnalysisResponse(symbol=request.symbol.upper(), **analyze_closes([c.close for c in request.candles]))
 
 
 @app.post("/v1/risk")
@@ -263,8 +239,7 @@ def risk(request: RiskRequest) -> dict:
     risk_amount = request.account_equity * request.risk_percent / 100.0
     stop_distance = abs(request.entry - request.stop_loss)
     reward_distance = abs(request.take_profit - request.entry)
-    rr = reward_distance / stop_distance if stop_distance else None
-    return {"symbol": request.symbol.upper(), "riskAmount": risk_amount, "stopDistance": stop_distance, "rewardDistance": reward_distance, "riskReward": rr}
+    return {"symbol": request.symbol.upper(), "riskAmount": risk_amount, "stopDistance": stop_distance, "rewardDistance": reward_distance, "riskReward": reward_distance / stop_distance if stop_distance else None}
 
 
 @app.post("/v1/backtest")
@@ -278,21 +253,4 @@ def backtest(request: BacktestRequest) -> dict:
         elif delta < -request.threshold:
             losses += 1
     total = wins + losses
-    accuracy = (wins / total * 100) if total else 0.0
-    return {"symbol": request.symbol.upper(), "samples": total, "wins": wins, "losses": losses, "accuracy": accuracy}
-
-
-@app.get("/v1/self-test")
-async def self_test(symbol: str = "XAUUSD") -> dict:
-    symbol = _validate_symbol(symbol)
-    quote = await _massive_quote(symbol)
-    test_candles = await _massive_candles(symbol, "1h", 5)
-    return {
-        "ok": True,
-        "symbol": symbol,
-        "quote": quote.model_dump(),
-        "candles": len(test_candles),
-        "provider": "Massive",
-        "no_yahoo_or_twelve_fallback": True,
-        "checkedAt": _now_ms(),
-    }
+    return {"symbol": request.symbol.upper(), "samples": total, "wins": wins, "losses": losses, "accuracy": wins / total * 100 if total else 0.0}
