@@ -55,15 +55,17 @@ class CandleRepository {
 
     private fun fetch(symbol: String, interval: String): List<Candle> {
         return try {
+            // Backend menerima timeframe API dalam format 1m/5m/15m/30m/1h/4h/1d.
+            // Jangan kirim label internal seperti 1Min atau 1Hour karena backend akan menolaknya.
             val timeframe = when (interval.lowercase()) {
-                "1m" -> "1Min"
-                "5m" -> "5Min"
-                "15m" -> "15Min"
-                "30m" -> "30Min"
-                "1h" -> "1Hour"
-                "4h" -> "4Hour"
-                "1d" -> "1Day"
-                else -> "5Min"
+                "1m", "1min", "1minute" -> "1m"
+                "5m", "5min", "5minute" -> "5m"
+                "15m", "15min", "15minute" -> "15m"
+                "30m", "30min", "30minute" -> "30m"
+                "1h", "1hour" -> "1h"
+                "4h", "4hour" -> "4h"
+                "1d", "1day" -> "1d"
+                else -> "5m"
             }
             val url = BackendConfig.baseUrl.trimEnd('/') + "/v1/candles?symbol=" + symbol + "&timeframe=" + timeframe + "&limit=160"
             val request = Request.Builder().url(url).header("Accept", "application/json").build()
